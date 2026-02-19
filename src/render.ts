@@ -515,7 +515,7 @@ export function commentsSummary (repo: string, comments: CommentData[]): string 
   const lines = [`[${repo}] ${comments.length} 条新评论\n`];
   for (const c of comments) {
     const src = c.source === 'pull_request' ? 'PR' : 'Issue';
-    lines.push(`[${src}#${c.number}] ${c.user.login}: ${c.body.replace(/\n/g, ' ').slice(0, 60)}`);
+    lines.push(`[${src}#${c.number}] ${c.user.login}: ${c.body.replace(/\n/g, ' ').slice(0, 500)}`);
   }
   return lines.join('\n');
 }
@@ -726,7 +726,7 @@ function mergedRepoHTML (repos: RepoCollectedData[]): string {
       totalCount += r.comments.length;
       parts.push(r.comments.slice(0, 2).map(c => {
         const src = c.source === 'pull_request' ? 'PR' : 'Issue';
-        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#58a6ff;font-size:11px">${src} #${c.number} 评论</span><span class="time">${fmtTime(c.created_at)}</span></div><div class="msg">${esc(truncate(c.body, 60))}</div></div>`;
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#58a6ff;font-size:11px">${src} #${c.number} 评论</span><span class="time">${fmtTime(c.created_at)}</span></div><div class="msg">${mdBodyToHTML(c.body, 500)}</div></div>`;
       }).join(''));
     }
 
