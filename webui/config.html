@@ -572,7 +572,7 @@
 
     .grp-dropdown {
       position: absolute;
-      top: 100%;
+      bottom: 100%;
       left: 0;
       right: 0;
       max-height: 200px;
@@ -580,8 +580,8 @@
       background: #fff;
       border: 1px solid var(--border);
       border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
-      z-index: 50;
+      box-shadow: 0 -4px 24px rgba(0, 0, 0, .12);
+      z-index: 90;
       display: none
     }
 
@@ -826,6 +826,7 @@
     <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
       <header class="header-bar">
         <div style="display:flex;align-items:center;gap:8px">
+          <div id="hdr-actions" style="display:flex;gap:6px"></div>
           <button onclick="doRefresh()" class="btn btn-s">刷新</button>
           <div class="status-wrap">
             <div id="sDot" class="status-dot" style="background:#f87171"></div>
@@ -911,10 +912,18 @@
                     style="background:rgba(207,34,46,.08);padding:1px 6px;border-radius:4px;color:var(--danger)">napcat-plugin-puppeteer</code>
                   来渲染推送图片。未安装时将降级为纯文本推送。
                 </div>
-                <div style="font-size:12px;color:var(--text2);line-height:1.8;margin-top:6px">
-                  安装方法：在 NapCat 插件商店搜索 <code
-                    style="background:rgba(31,111,235,.08);padding:1px 6px;border-radius:4px">napcat-plugin-puppeteer</code>
-                  并安装，建议将浏览器安装到 NapCat 容器内。
+                <div style="font-size:12px;color:var(--text2);line-height:1.8;margin-top:8px">
+                  <div style="font-weight:600;color:var(--text1);margin-bottom:4px">安装方法：</div>
+                  <div style="padding-left:4px">
+                    <p style="margin:2px 0">1. 在 NapCat 插件商店搜索并安装 插件自动更新 <code
+                        style="background:rgba(31,111,235,.08);padding:1px 6px;border-radius:4px">napcat-plugin-autoupdate</code>
+                    </p>
+                    <p style="margin:2px 0">2. 进入 插件自动更新 <code
+                        style="background:rgba(31,111,235,.08);padding:1px 6px;border-radius:4px">napcat-plugin-autoupdate</code>
+                      的仪表盘页面</p>
+                    <p style="margin:2px 0">3. 在仪表盘中点击安装 Puppeteer 渲染服务插件</p>
+                    <p style="margin:2px 0">4. 建议将浏览器安装到 NapCat 容器内</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -964,6 +973,16 @@
                       README）</p>
                   </div>
                   <div class="tgl" id="cfg-autoDetectRepo" onclick="tg(this)"></div>
+                </div>
+              </div>
+              <div>
+                <div class="cfg-row">
+                  <div>
+                    <span style="font-size:14px;font-weight:500">合并推送</span>
+                    <p style="font-size:11px;color:var(--text3);margin-top:2px">
+                      开启后，每轮轮询将所有仓库更新合并成一张图、所有用户动态合并成另一张图推送，减少消息数量</p>
+                  </div>
+                  <div class="tgl" id="cfg-mergeNotify" onclick="tg(this)"></div>
                 </div>
               </div>
             </div>
@@ -1104,9 +1123,6 @@
                   </div>
                 </div>
               </div>
-            </div>
-            <div style="text-align:right;margin-top:8px">
-              <button class="btn btn-p" onclick="saveConfig()">保存配置</button>
             </div>
           </div>
         </div>
@@ -1291,23 +1307,17 @@
                 style="min-height:300px;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.6;resize:vertical;white-space:pre;tab-size:2"
                 placeholder="留空使用内置模板，输入完整 HTML 文档（含 <!DOCTYPE html>）..."></textarea>
             </div>
-            <div style="display:flex;gap:8px;justify-content:space-between;align-items:center">
-              <div style="display:flex;gap:8px">
-                <button class="btn btn-p" onclick="saveTpl()">保存模板</button>
-                <button class="btn btn-s" onclick="clearTpl()">清空（恢复内置）</button>
-              </div>
-              <button class="btn btn-s" onclick="previewTpl()">预览效果</button>
-            </div>
-            <div id="tpl-preview" style="margin-top:16px;display:none">
-              <div class="sec-t">预览</div>
-              <div id="tpl-preview-frame"
-                style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff"></div>
-            </div>
+          </div>
+          <div id="tpl-preview" style="margin-top:16px;display:none">
+            <div class="sec-t">预览</div>
+            <div id="tpl-preview-frame"
+              style="border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff"></div>
           </div>
         </div>
-
-      </main>
     </div>
+
+    </main>
+  </div>
   </div>
 
   <script>
@@ -1360,8 +1370,13 @@
       document.querySelectorAll('.pg').forEach(p => p.classList.remove('active'));
       document.querySelectorAll('.sb').forEach(s => s.classList.remove('active'));
       $('pg-' + pg)?.classList.add('active'); el?.classList.add('active');
-      if (pg === 'dashboard') updDash(); if (pg === 'subs') { renderSubs(); renderUsers(); }
-      if (pg === 'add') { if (!addUserPicker) addUserPicker = createGroupPicker('add-user-grp-picker', []); }
+      // 动态顶部操作按钮
+      const ha = $('hdr-actions');
+      if (pg === 'config') ha.innerHTML = '<button class="btn btn-p" onclick="saveConfig()">保存配置</button>';
+      else if (pg === 'tpl') ha.innerHTML = '<button class="btn btn-p" onclick="saveTpl()">保存模板</button><button class="btn btn-s" onclick="clearTpl()">清空</button><button class="btn btn-s" onclick="previewTpl()">预览</button>';
+      else ha.innerHTML = '';
+      if (pg === 'dashboard') updDash(); if (pg === 'subs') renderSubs();
+      if (pg === 'users') { renderUsers(); if (!addUserPicker) addUserPicker = createGroupPicker('add-user-grp-picker', []); }
       if (pg === 'logs') { loadLogs(); startLR(); stg('l-db', CFG.debug); } else stopLR();
       if (pg === 'tpl') switchTpl(curTpl || 'commits');
     }
@@ -1471,9 +1486,10 @@
         CFG = d.config || {}; SUBS = d.subscriptions || []; USUBS = d.userSubscriptions || [];
         if (d.version) { const v = 'v' + d.version; $('sidebar-ver').textContent = 'GitSub ' + v; $('dash-ver').textContent = 'GitSub ' + v + ' · by 冷曦'; }
         if (g.success) GL = g.data || [];
-        fillConfig(); updDash(); renderSubs();
+        fillConfig(); updDash(); renderSubs(); renderUsers();
         // 初始化群选择器
         if (!addPicker) addPicker = createGroupPicker('add-grp-picker', []);
+        if (!addUserPicker) addUserPicker = createGroupPicker('add-user-grp-picker', []);
         $('sDot').style.background = '#3fb950'; $('sTxt').textContent = '已连接';
       } catch (e) { toast('连接失败: ' + e, 'error'); }
     }
@@ -1503,6 +1519,7 @@
       renderOwners();
       stg('cfg-allowMemberSub', CFG.allowMemberSub);
       stg('cfg-autoDetectRepo', CFG.autoDetectRepo !== false);
+      stg('cfg-mergeNotify', CFG.mergeNotify);
       // Token 列表
       tokenList = [];
       tokensModified = false;
@@ -1623,6 +1640,7 @@
         owners: ownerList,
         allowMemberSub: gtg('cfg-allowMemberSub'),
         autoDetectRepo: gtg('cfg-autoDetectRepo'),
+        mergeNotify: gtg('cfg-mergeNotify'),
         theme,
       };
       if (tokensModified) {

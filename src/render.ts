@@ -667,3 +667,145 @@ export function userActivitySummary (username: string, items: UserActivityItem[]
   }
   return lines.join('\n');
 }
+
+// ===== 合并推送渲染 =====
+
+/** 合并推送的仓库数据类型 */
+interface RepoCollectedData {
+  repo: string;
+  commits: CommitData[];
+  issues: IssueData[];
+  pulls: IssueData[];
+  comments: CommentData[];
+  actions: ActionRunData[];
+}
+
+/** 合并推送的用户数据类型 */
+interface UserCollectedData {
+  username: string;
+  items: UserActivityItem[];
+}
+
+/** 合并仓库推送 HTML */
+function mergedRepoHTML (repos: RepoCollectedData[]): string {
+  const t = getTheme();
+  let totalCount = 0;
+  const sections: string[] = [];
+
+  for (const r of repos) {
+    const parts: string[] = [];
+
+    if (r.commits.length) {
+      totalCount += r.commits.length;
+      const showCommits = r.commits.slice(0, 3);
+      parts.push(showCommits.map(c => {
+        const msg = esc(truncate(c.commit.message.split('\n')[0], 60));
+        const sha = c.sha.slice(0, 7);
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span class="sha">${sha}</span><span style="color:${t.textSub};font-size:11px">Commit</span><span class="time">${fmtTime(c.commit.author.date)}</span></div><div class="msg">${msg}</div></div>`;
+      }).join(''));
+      if (r.commits.length > 3) parts.push(`<div style="font-size:11px;color:${t.textMuted};padding:2px 0">还有 ${r.commits.length - 3} 条 commit</div>`);
+    }
+
+    if (r.issues.length) {
+      totalCount += r.issues.length;
+      parts.push(r.issues.map(i => {
+        const tag = mdActionTag(i.action, i.state);
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#8957e5;font-size:11px">Issue #${i.number}</span>${tag}<span class="time">${fmtTime(i.created_at)}</span></div><div class="msg">${esc(truncate(i.title, 60))}</div></div>`;
+      }).join(''));
+    }
+
+    if (r.pulls.length) {
+      totalCount += r.pulls.length;
+      parts.push(r.pulls.map(p => {
+        const tag = mdActionTag(p.action, p.state);
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#db6d28;font-size:11px">PR #${p.number}</span>${tag}<span class="time">${fmtTime(p.created_at)}</span></div><div class="msg">${esc(truncate(p.title, 60))}</div></div>`;
+      }).join(''));
+    }
+
+    if (r.comments.length) {
+      totalCount += r.comments.length;
+      parts.push(r.comments.slice(0, 2).map(c => {
+        const src = c.source === 'pull_request' ? 'PR' : 'Issue';
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#58a6ff;font-size:11px">${src} #${c.number} 评论</span><span class="time">${fmtTime(c.created_at)}</span></div><div class="msg">${esc(truncate(c.body, 60))}</div></div>`;
+      }).join(''));
+    }
+
+    if (r.actions.length) {
+      totalCount += r.actions.length;
+      parts.push(r.actions.slice(0, 2).map(a => {
+        const conclusion = a.conclusion || a.status;
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#d29922;font-size:11px">Action #${a.run_number}</span><span style="font-size:11px;color:${t.textMuted}">${esc(conclusion)}</span><span class="time">${fmtTime(a.created_at)}</span></div><div class="msg">${esc(truncate(a.name, 60))}</div></div>`;
+      }).join(''));
+    }
+
+    if (parts.length) {
+      sections.push(`<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid ${t.divider}"><div style="font-size:13px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px">${SVG.commit}<span>${esc(r.repo)}</span></div>${parts.join('')}</div>`);
+    }
+  }
+
+  // 去掉最后一个 section 的 border-bottom
+  if (sections.length) {
+    sections[sections.length - 1] = sections[sections.length - 1].replace(/border-bottom:1px solid [^;]+;/, 'border-bottom:none;');
+  }
+
+  const ghIcon = `<svg width="20" height="20" viewBox="0 0 16 16" fill="${t.text}"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>`;
+  return wrapHTML(`${repos.length} 个仓库`, '仓库订阅汇总', '#2ea44f', ghIcon, totalCount, sections.join(''));
+}
+
+/** 合并用户推送 HTML */
+function mergedUsersHTML (users: UserCollectedData[]): string {
+  const t = getTheme();
+  let totalCount = 0;
+  const sections: string[] = [];
+
+  for (const u of users) {
+    totalCount += u.items.length;
+    const rows = u.items.slice(0, 5).map(item => {
+      const ev = USER_EVENT_MAP[item.type] || { icon: SVG.commit, color: t.textSub };
+      return `<div class="item" style="padding:6px 0"><div class="item-header"><span class="header-icon" style="display:inline-flex;align-items:center">${ev.icon}</span><span style="color:${ev.color};font-weight:500;font-size:11px">${esc(item.type.replace('Event', ''))}</span><span style="color:${t.textSub};font-size:11px">${esc(item.repo)}</span><span class="time">${fmtTime(item.time)}</span></div><div class="msg">${esc(truncate(item.desc, 80))}</div></div>`;
+    }).join('');
+    const extra = u.items.length > 5 ? `<div style="font-size:11px;color:${t.textMuted};padding:2px 0">还有 ${u.items.length - 5} 条动态</div>` : '';
+    sections.push(`<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid ${t.divider}"><div style="font-size:13px;font-weight:600;margin-bottom:6px">${esc(u.username)}</div>${rows}${extra}</div>`);
+  }
+
+  if (sections.length) {
+    sections[sections.length - 1] = sections[sections.length - 1].replace(/border-bottom:1px solid [^;]+;/, 'border-bottom:none;');
+  }
+
+  const userIcon = `<svg width="20" height="20" viewBox="0 0 16 16" fill="#58a6ff"><path d="M10.561 8.073a6.005 6.005 0 0 1 3.432 5.142.75.75 0 1 1-1.498.07 4.5 4.5 0 0 0-8.99 0 .75.75 0 0 1-1.498-.07 6.004 6.004 0 0 1 3.431-5.142 3.999 3.999 0 1 1 5.123 0ZM10.5 5a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z"/></svg>`;
+  return wrapHTML(`${users.length} 个用户`, '用户动态汇总', '#58a6ff', userIcon, totalCount, sections.join(''));
+}
+
+/** 渲染合并仓库推送 */
+export async function renderMergedRepo (repos: RepoCollectedData[]): Promise<string | null> {
+  return renderToBase64(mergedRepoHTML(repos));
+}
+
+/** 合并仓库推送文本摘要 */
+export function mergedRepoSummary (repos: RepoCollectedData[]): string {
+  const lines = [`[仓库订阅汇总] ${repos.length} 个仓库有更新\n`];
+  for (const r of repos) {
+    const parts: string[] = [];
+    if (r.commits.length) parts.push(`${r.commits.length} commits`);
+    if (r.issues.length) parts.push(`${r.issues.length} issues`);
+    if (r.pulls.length) parts.push(`${r.pulls.length} PRs`);
+    if (r.comments.length) parts.push(`${r.comments.length} comments`);
+    if (r.actions.length) parts.push(`${r.actions.length} actions`);
+    lines.push(`${r.repo}: ${parts.join(', ')}`);
+  }
+  return lines.join('\n');
+}
+
+/** 渲染合并用户推送 */
+export async function renderMergedUsers (users: UserCollectedData[]): Promise<string | null> {
+  return renderToBase64(mergedUsersHTML(users));
+}
+
+/** 合并用户推送文本摘要 */
+export function mergedUsersSummary (users: UserCollectedData[]): string {
+  const lines = [`[用户动态汇总] ${users.length} 个用户有更新\n`];
+  for (const u of users) {
+    lines.push(`${u.username}: ${u.items.length} 条动态`);
+  }
+  return lines.join('\n');
+}

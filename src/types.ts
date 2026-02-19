@@ -96,6 +96,8 @@ export interface PluginConfig {
   webuiPort?: number;
   /** 自动识别 GitHub 仓库链接并渲染为图片 */
   autoDetectRepo: boolean;
+  /** 合并推送模式：每轮轮询将所有仓库更新合并成一张图，用户更新合并成另一张图 */
+  mergeNotify: boolean;
   /** 订阅列表 */
   subscriptions: Subscription[];
   /** 用户监控列表 */

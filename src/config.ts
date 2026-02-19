@@ -11,6 +11,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   allowMemberSub: true,
   theme: 'light',
   autoDetectRepo: true,
+  mergeNotify: false,
   subscriptions: [],
   userSubscriptions: [],
 };

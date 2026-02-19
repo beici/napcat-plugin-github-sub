@@ -20,6 +20,7 @@ export function registerApiRoutes (router: any): void {
         owners: pluginState.config.owners || [],
         allowMemberSub: pluginState.config.allowMemberSub ?? false,
         autoDetectRepo: pluginState.config.autoDetectRepo !== false,
+        mergeNotify: pluginState.config.mergeNotify ?? false,
         theme: pluginState.config.theme || 'light',
         customTheme: pluginState.config.customTheme || null,
         customHTML: pluginState.config.customHTML || null,
@@ -48,6 +49,7 @@ export function registerApiRoutes (router: any): void {
     }
     if (body.allowMemberSub !== undefined) pluginState.config.allowMemberSub = Boolean(body.allowMemberSub);
     if (body.autoDetectRepo !== undefined) pluginState.config.autoDetectRepo = Boolean(body.autoDetectRepo);
+    if (body.mergeNotify !== undefined) pluginState.config.mergeNotify = Boolean(body.mergeNotify);
     if (body.theme !== undefined && ['light', 'dark', 'custom'].includes(String(body.theme))) {
       pluginState.config.theme = String(body.theme) as 'light' | 'dark' | 'custom';
     }
