@@ -12,4 +12,5 @@ export const DEFAULT_CONFIG: PluginConfig = {
   theme: 'light',
   autoDetectRepo: true,
   subscriptions: [],
+  userSubscriptions: [],
 };

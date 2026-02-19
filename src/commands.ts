@@ -1,7 +1,7 @@
 // 指令处理模块
 import type { NapCatPluginContext } from 'napcat-types/napcat-onebot/network/plugin-manger';
 import type { OB11Message } from 'napcat-types/napcat-onebot/types/index';
-import type { EventType, Subscription } from './types';
+import type { EventType, Subscription, UserSubscription } from './types';
 import { pluginState } from './state';
 import { fetchDefaultBranch } from './github';
 import { stopPoller, startPoller } from './poller';
@@ -44,6 +44,9 @@ export async function handleCommand (event: OB11Message, cmd: string, ctx: NapCa
         `${prefix} 订阅 <owner/repo>`,
         `${prefix} 取消 <owner/repo>`,
         `${prefix} 开启/关闭 <owner/repo>`,
+        `${prefix} 关注 <username>`,
+        `${prefix} 取关 <username>`,
+        `${prefix} 关注列表`,
       );
     }
     lines.push('', '细节配置请前往 WebUI 控制台');
@@ -165,6 +168,84 @@ export async function handleCommand (event: OB11Message, cmd: string, ctx: NapCa
     sub.enabled = enable;
     pluginState.saveConfig();
     await sendReply(event, `✅ ${repo} 已${enable ? '开启' : '关闭'}`, ctx);
+    return true;
+  }
+
+  // gh 关注 username
+  const followMatch = cmd.match(/^关注\s+([^\s]+)$/);
+  if (followMatch) {
+    if (!canSub(userId)) {
+      await sendReply(event, '❌ 该指令仅主人可触发', ctx);
+      return true;
+    }
+    const username = followMatch[1];
+    if (username.includes('/')) {
+      await sendReply(event, '❌ 请输入用户名，不是仓库名', ctx);
+      return true;
+    }
+    if (!pluginState.config.userSubscriptions) pluginState.config.userSubscriptions = [];
+    const existing = pluginState.config.userSubscriptions.find(u => u.username.toLowerCase() === username.toLowerCase());
+    if (existing) {
+      if (groupId && !existing.groups.includes(groupId)) existing.groups.push(groupId);
+      existing.enabled = true;
+      pluginState.saveConfig();
+      await sendReply(event, `✅ 已更新用户监控 ${username}\n推送群: ${existing.groups.join(', ')}`, ctx);
+      return true;
+    }
+    const userSub: UserSubscription = {
+      username,
+      groups: groupId ? [groupId] : [],
+      enabled: true,
+      createdAt: new Date().toISOString(),
+    };
+    pluginState.config.userSubscriptions.push(userSub);
+    pluginState.saveConfig();
+    await sendReply(event, `✅ 已关注用户 ${username}\n推送群: ${userSub.groups.join(', ') || '无'}`, ctx);
+    return true;
+  }
+
+  // gh 取关 username
+  const unfollowMatch = cmd.match(/^取关\s+([^\s]+)$/);
+  if (unfollowMatch) {
+    if (!canSub(userId)) {
+      await sendReply(event, '❌ 该指令仅主人可触发', ctx);
+      return true;
+    }
+    const username = unfollowMatch[1];
+    if (!pluginState.config.userSubscriptions) pluginState.config.userSubscriptions = [];
+    const idx = pluginState.config.userSubscriptions.findIndex(u => u.username.toLowerCase() === username.toLowerCase());
+    if (idx === -1) {
+      await sendReply(event, `❌ 未找到用户监控 ${username}`, ctx);
+      return true;
+    }
+    if (groupId) {
+      const sub = pluginState.config.userSubscriptions[idx];
+      sub.groups = sub.groups.filter(g => g !== groupId);
+      if (sub.groups.length === 0) {
+        pluginState.config.userSubscriptions.splice(idx, 1);
+        await sendReply(event, `✅ 已完全取关 ${username}`, ctx);
+      } else {
+        await sendReply(event, `✅ 已从本群取关 ${username}（其他群仍在推送）`, ctx);
+      }
+    } else {
+      pluginState.config.userSubscriptions.splice(idx, 1);
+      await sendReply(event, `✅ 已取关 ${username}`, ctx);
+    }
+    pluginState.saveConfig();
+    return true;
+  }
+
+  // gh 关注列表
+  if (cmd === '关注列表') {
+    const users = (pluginState.config.userSubscriptions || []).filter(u => !groupId || u.groups.includes(groupId));
+    if (!users.length) {
+      await sendReply(event, '📋 当前无用户监控', ctx);
+      return true;
+    }
+    const lines = users.map(u =>
+      `${u.enabled ? '✅' : '❌'} ${u.username} → ${u.groups.length}个群`
+    );
+    await sendReply(event, `📋 用户监控列表 (${users.length}个):\n${lines.join('\n')}`, ctx);
     return true;
   }
 

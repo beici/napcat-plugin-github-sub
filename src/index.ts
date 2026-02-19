@@ -78,7 +78,7 @@ const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext
   if (fs.existsSync(ctx.configPath)) {
     try {
       const raw = JSON.parse(fs.readFileSync(ctx.configPath, 'utf-8'));
-      pluginState.config = { ...DEFAULT_CONFIG, ...raw, subscriptions: raw.subscriptions || [], owners: raw.owners || [], tokens: raw.tokens || [] };
+      pluginState.config = { ...DEFAULT_CONFIG, ...raw, subscriptions: raw.subscriptions || [], userSubscriptions: raw.userSubscriptions || [], owners: raw.owners || [], tokens: raw.tokens || [] };
     } catch { /* ignore */ }
   }
 
@@ -102,11 +102,12 @@ const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext
   }
 
   // 启动轮询
-  if (pluginState.config.subscriptions.length > 0) {
+  if (pluginState.config.subscriptions.length > 0 || (pluginState.config.userSubscriptions || []).length > 0) {
     startPoller();
   }
 
-  pluginState.log('info', `GitHub 订阅插件初始化完成，${pluginState.config.subscriptions.length} 个订阅`);
+  const userCount = (pluginState.config.userSubscriptions || []).length;
+  pluginState.log('info', `GitHub 订阅插件初始化完成，${pluginState.config.subscriptions.length} 个仓库订阅，${userCount} 个用户监控`);
 };
 
 // 配置读写
@@ -134,7 +135,7 @@ const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPlu
     const handled = await handleCommand(event, cmd, ctx);
 
     // 如果添加了新订阅且轮询未启动，启动轮询
-    if (handled && pluginState.config.subscriptions.length > 0) {
+    if (handled && (pluginState.config.subscriptions.length > 0 || (pluginState.config.userSubscriptions || []).length > 0)) {
       stopPoller();
       startPoller();
     }

@@ -1,5 +1,5 @@
 // WebUI API 路由
-import type { Subscription, EventType } from './types';
+import type { Subscription, EventType, UserSubscription } from './types';
 import { pluginState } from './state';
 import { fetchDefaultBranch } from './github';
 import { stopPoller, startPoller } from './poller';
@@ -26,6 +26,7 @@ export function registerApiRoutes (router: any): void {
         webuiPort: pluginState.config.webuiPort || null,
       },
       subscriptions: pluginState.config.subscriptions,
+      userSubscriptions: pluginState.config.userSubscriptions || [],
     });
   });
 
@@ -122,6 +123,63 @@ export function registerApiRoutes (router: any): void {
     pluginState.config.subscriptions.splice(idx, 1);
     pluginState.saveConfig();
     res.json({ success: true });
+  });
+
+  // ===== 用户监控 API =====
+
+  // 添加用户监控
+  router.postNoAuth('/user/add', (req: any, res: any) => {
+    const { username, groups } = req.body as { username?: string; groups?: string[]; };
+    const name = username?.trim();
+    if (!name) { res.json({ success: false, error: '用户名不能为空' }); return; }
+    if (!pluginState.config.userSubscriptions) pluginState.config.userSubscriptions = [];
+    const existing = pluginState.config.userSubscriptions.find(u => u.username.toLowerCase() === name.toLowerCase());
+    if (existing) { res.json({ success: false, error: '该用户已在监控列表' }); return; }
+    const userSub: UserSubscription = {
+      username: name,
+      groups: groups || [],
+      enabled: true,
+      createdAt: new Date().toISOString(),
+    };
+    pluginState.config.userSubscriptions.push(userSub);
+    pluginState.saveConfig();
+    stopPoller();
+    startPoller();
+    res.json({ success: true, data: userSub });
+  });
+
+  // 更新用户监控
+  router.postNoAuth('/user/update', (req: any, res: any) => {
+    const { username, groups, enabled } = req.body as Partial<UserSubscription> & { username: string; };
+    if (!pluginState.config.userSubscriptions) pluginState.config.userSubscriptions = [];
+    const sub = pluginState.config.userSubscriptions.find(u => u.username === username);
+    if (!sub) { res.json({ success: false, error: '未找到该用户监控' }); return; }
+    if (groups) sub.groups = groups;
+    if (enabled !== undefined) sub.enabled = enabled;
+    pluginState.saveConfig();
+    res.json({ success: true, data: sub });
+  });
+
+  // 删除用户监控
+  router.postNoAuth('/user/delete', (req: any, res: any) => {
+    const { username } = req.body as { username?: string; };
+    if (!pluginState.config.userSubscriptions) pluginState.config.userSubscriptions = [];
+    const idx = pluginState.config.userSubscriptions.findIndex(u => u.username === username);
+    if (idx === -1) { res.json({ success: false, error: '未找到该用户监控' }); return; }
+    pluginState.config.userSubscriptions.splice(idx, 1);
+    pluginState.saveConfig();
+    res.json({ success: true });
+  });
+
+  // 切换用户监控开关
+  router.postNoAuth('/user/toggle', (req: any, res: any) => {
+    const { username } = req.body as { username?: string; };
+    if (!pluginState.config.userSubscriptions) pluginState.config.userSubscriptions = [];
+    const sub = pluginState.config.userSubscriptions.find(u => u.username === username);
+    if (!sub) { res.json({ success: false, error: '未找到该用户监控' }); return; }
+    sub.enabled = !sub.enabled;
+    pluginState.saveConfig();
+    res.json({ success: true, enabled: sub.enabled });
   });
 
   // 获取群列表

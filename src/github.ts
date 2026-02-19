@@ -74,6 +74,21 @@ export async function fetchEvents (repo: string, perPage = 30): Promise<GitHubEv
   return events;
 }
 
+/** 获取用户公开事件 */
+export async function fetchUserEvents (username: string, perPage = 30): Promise<GitHubEvent[]> {
+  const base = pluginState.config.apiBase || 'https://api.github.com';
+  const url = `${base}/users/${username}/events/public?per_page=${perPage}`;
+  pluginState.debug(`[GitHub] 获取用户事件: ${username}`);
+  const events = await fetchJSON<GitHubEvent[]>(url) || [];
+  if (events.length) {
+    const types = [...new Set(events.map(e => e.type))];
+    pluginState.debug(`[GitHub] ${username}: ${events.length} 条事件，类型: ${types.join(', ')}`);
+  } else {
+    pluginState.debug(`[GitHub] ${username}: 无事件`);
+  }
+  return events;
+}
+
 /** 获取仓库默认分支 */
 export async function fetchDefaultBranch (repo: string): Promise<string> {
   const base = pluginState.config.apiBase || 'https://api.github.com';

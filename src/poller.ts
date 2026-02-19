@@ -1,8 +1,8 @@
 // 轮询模块 - 使用 Events API，每个仓库只需 1 次请求
-import type { GitHubEvent, CommitData, IssueData, CommentData, ActionRunData, EventType } from './types';
+import type { GitHubEvent, CommitData, IssueData, CommentData, ActionRunData, EventType, UserActivityItem } from './types';
 import { pluginState } from './state';
-import { fetchEvents, fetchCommitDetail, fetchActionRuns } from './github';
-import { renderCommits, renderIssues, renderPulls, renderComments, renderActions, commitsSummary, issuesSummary, commentsSummary, actionsSummary } from './render';
+import { fetchEvents, fetchCommitDetail, fetchActionRuns, fetchUserEvents } from './github';
+import { renderCommits, renderIssues, renderPulls, renderComments, renderActions, commitsSummary, issuesSummary, commentsSummary, actionsSummary, renderUserActivity, userActivitySummary } from './render';
 
 /** 发送 base64 图片消息到群，失败则降级为文本 */
 async function sendImage (groupId: string, base64: string | null, fallbackText: string): Promise<void> {
@@ -96,9 +96,11 @@ function extractPulls (events: GitHubEvent[]): IssueData[] {
     const p = ev.payload.pull_request as any;
     if (!p || seen.has(p.number)) continue;
     seen.add(p.number);
+    const prTitle = p.title || (ev.payload as any).title || '';
+    pluginState.debug(`[PR] #${p.number} title="${prTitle}" raw_title=${JSON.stringify(p.title)}`);
     pulls.push({
       number: p.number,
-      title: p.title || '',
+      title: prTitle,
       state: p.merged ? 'merged' : (p.state || 'open'),
       user: { login: p.user?.login || ev.actor.login, avatar_url: p.user?.avatar_url || '' },
       created_at: p.created_at || ev.created_at,
@@ -291,10 +293,120 @@ async function checkRepo (repo: string, branch: string, types: EventType[], grou
   }
 }
 
+/** 从用户事件中提取活动摘要 */
+function extractUserActivity (events: GitHubEvent[], username: string): UserActivityItem[] {
+  const items: UserActivityItem[] = [];
+  for (const ev of events) {
+    const repo = (ev.payload as any).repo?.name || (ev as any).repo?.name || '';
+    let desc = '';
+    switch (ev.type) {
+      case 'PushEvent': {
+        const commits = (ev.payload.commits as any[]) || [];
+        const count = ev.payload.size || commits.length;
+        const msg = commits[0]?.message?.split('\n')[0] || '';
+        desc = `推送 ${count} 个 commit` + (msg ? `: ${msg}` : '');
+        break;
+      }
+      case 'CreateEvent':
+        desc = `创建 ${ev.payload.ref_type || 'repository'}` + (ev.payload.ref ? ` ${ev.payload.ref}` : '');
+        break;
+      case 'DeleteEvent':
+        desc = `删除 ${ev.payload.ref_type || ''} ${ev.payload.ref || ''}`;
+        break;
+      case 'IssuesEvent': {
+        const issue = ev.payload.issue as any;
+        desc = `${ev.payload.action || ''} Issue #${issue?.number || ''}: ${issue?.title || ''}`;
+        break;
+      }
+      case 'IssueCommentEvent': {
+        const issue = ev.payload.issue as any;
+        const body = (ev.payload.comment as any)?.body || '';
+        desc = `评论 #${issue?.number || ''}: ${body.replace(/\n/g, ' ')}`;
+        break;
+      }
+      case 'PullRequestEvent': {
+        const pr = ev.payload.pull_request as any;
+        desc = `${ev.payload.action || ''} PR #${pr?.number || ''}: ${pr?.title || ''}`;
+        break;
+      }
+      case 'PullRequestReviewEvent': {
+        const pr = ev.payload.pull_request as any;
+        desc = `Review PR #${pr?.number || ''}: ${pr?.title || ''}`;
+        break;
+      }
+      case 'PullRequestReviewCommentEvent': {
+        const pr = ev.payload.pull_request as any;
+        const body = (ev.payload.comment as any)?.body || '';
+        desc = `评论 PR #${pr?.number || ''}: ${body.replace(/\n/g, ' ')}`;
+        break;
+      }
+      case 'WatchEvent':
+        desc = `Star 了仓库`;
+        break;
+      case 'ForkEvent':
+        desc = `Fork 了仓库`;
+        break;
+      case 'ReleaseEvent': {
+        const rel = ev.payload.release as any;
+        desc = `${ev.payload.action || ''} Release ${rel?.tag_name || ''}`;
+        break;
+      }
+      default:
+        desc = ev.type.replace('Event', '');
+    }
+    items.push({ type: ev.type, repo, desc, time: ev.created_at, url: '' });
+  }
+  return items;
+}
+
+/** 检查单个用户的活动 */
+async function checkUser (username: string, groups: string[]): Promise<void> {
+  const cacheKey = `user:${username}`;
+  pluginState.debug(`[轮询] 检查用户: ${username}`);
+
+  const events = await fetchUserEvents(username);
+  if (!events.length) {
+    pluginState.debug(`[轮询] ${username}: 无事件`);
+    return;
+  }
+
+  const latestId = events[0].id;
+  const lastKnown = pluginState.cache[cacheKey];
+
+  if (!lastKnown) {
+    pluginState.cache[cacheKey] = latestId;
+    pluginState.saveCache();
+    pluginState.log('info', `[${username}] 用户监控首次运行，记录最新事件 ID: ${latestId}`);
+    return;
+  }
+
+  if (lastKnown === latestId) {
+    pluginState.debug(`[轮询] ${username}: 无更新`);
+    return;
+  }
+
+  const lastIdx = events.findIndex(e => e.id === lastKnown);
+  const newEvents = lastIdx > 0 ? events.slice(0, lastIdx) : events.slice(0, 10);
+
+  if (!newEvents.length) return;
+
+  pluginState.cache[cacheKey] = latestId;
+  pluginState.saveCache();
+
+  const items = extractUserActivity(newEvents, username);
+  if (!items.length) return;
+
+  pluginState.log('info', `[${username}] 推送 ${items.length} 条用户动态到 ${groups.length} 个群`);
+  const base64 = await renderUserActivity(username, items);
+  const fallback = userActivitySummary(username, items);
+  for (const gid of groups) await sendImage(gid, base64, fallback);
+}
+
 /** 执行一次完整轮询 */
 export async function poll (): Promise<void> {
   const activeSubs = pluginState.config.subscriptions.filter(s => s.enabled && s.groups.length);
-  pluginState.debug(`[定时] 开始轮询，共 ${activeSubs.length} 个活跃订阅`);
+  const activeUsers = (pluginState.config.userSubscriptions || []).filter(u => u.enabled && u.groups.length);
+  pluginState.debug(`[定时] 开始轮询，共 ${activeSubs.length} 个仓库订阅，${activeUsers.length} 个用户监控`);
   const start = Date.now();
 
   for (const sub of activeSubs) {
@@ -305,6 +417,14 @@ export async function poll (): Promise<void> {
     }
   }
 
+  for (const userSub of activeUsers) {
+    try {
+      await checkUser(userSub.username, userSub.groups);
+    } catch (e) {
+      pluginState.log('error', `轮询用户 ${userSub.username} 失败: ${e}`);
+    }
+  }
+
   const ms = Date.now() - start;
   pluginState.debug(`[定时] 轮询完成，耗时 ${ms}ms`);
 }
@@ -312,7 +432,8 @@ export async function poll (): Promise<void> {
 /** 启动轮询 */
 export function startPoller (): void {
   const sec = Math.max(pluginState.config.interval || 30, 5);
-  pluginState.log('info', `轮询已启动，间隔 ${sec} 秒，共 ${pluginState.config.subscriptions.length} 个订阅`);
+  const userCount = (pluginState.config.userSubscriptions || []).length;
+  pluginState.log('info', `轮询已启动，间隔 ${sec} 秒，共 ${pluginState.config.subscriptions.length} 个仓库订阅，${userCount} 个用户监控`);
   pluginState.setPollTimer(setInterval(() => poll().catch(() => { }), sec * 1000));
 }
 

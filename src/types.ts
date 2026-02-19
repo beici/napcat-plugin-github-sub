@@ -2,6 +2,32 @@
 
 export type EventType = 'commits' | 'issues' | 'pulls' | 'actions';
 
+/** 用户监控订阅 */
+export interface UserSubscription {
+  /** GitHub 用户名 */
+  username: string;
+  /** 推送的群列表 */
+  groups: string[];
+  /** 是否启用 */
+  enabled: boolean;
+  /** 添加时间 */
+  createdAt: string;
+}
+
+/** 用户活动事件（渲染用） */
+export interface UserActivityItem {
+  /** 事件类型 */
+  type: string;
+  /** 仓库全名 */
+  repo: string;
+  /** 事件描述 */
+  desc: string;
+  /** 事件时间 */
+  time: string;
+  /** 事件链接 */
+  url: string;
+}
+
 export interface Subscription {
   /** 仓库全名 owner/repo */
   repo: string;
@@ -72,6 +98,8 @@ export interface PluginConfig {
   autoDetectRepo: boolean;
   /** 订阅列表 */
   subscriptions: Subscription[];
+  /** 用户监控列表 */
+  userSubscriptions: UserSubscription[];
 }
 
 /** 已知的最新事件 ID 缓存 */
@@ -177,26 +205,8 @@ export interface ActionRunData {
   actor: { login: string; avatar_url: string; };
   event: string;
   run_number: number;
-
-  /** GitHub 仓库信息 */
-  export interface RepoInfo {
-  full_name: string;
-  description: string | null;
-  html_url: string;
-  stargazers_count: number;
-  forks_count: number;
-  open_issues_count: number;
-  language: string | null;
-  license: { name: string; } | null;
-  owner: { login: string; avatar_url: string; };
-  created_at: string;
-  updated_at: string;
-  topics: string[];
-  default_branch: string;
 }
 
-
-}
 /** GitHub 仓库信息 */
 export interface RepoInfo {
   full_name: string;

@@ -1,5 +1,5 @@
 // 渲染模块 - 通过 puppeteer 插件截图 HTML 为 base64 图片
-import type { CommitData, IssueData, CommentData, ActionRunData, ThemeColors, RepoInfo } from './types';
+import type { CommitData, IssueData, CommentData, ActionRunData, ThemeColors, RepoInfo, UserActivityItem } from './types';
 import { pluginState } from './state';
 
 /** 转义 HTML */
@@ -339,6 +339,7 @@ function issuesHTML (repo: string, issues: IssueData[]): string {
 function pullsHTML (repo: string, pulls: IssueData[]): string {
   const rows = pulls.map(p => {
     const title = esc(truncate(p.title, 80));
+    pluginState.debug(`[渲染PR] #${p.number} title="${p.title}" escaped="${title}"`);
     const author = esc(p.user.login);
     const time = fmtTime(p.created_at);
     const tag = mdActionTag(p.action, p.state);
@@ -614,4 +615,55 @@ export async function renderComments (repo: string, comments: CommentData[]): Pr
     }));
   }
   return renderToBase64(commentsHTML(repo, comments));
+}
+
+/** 事件类型 → 中文描述 + 颜色 */
+const USER_EVENT_MAP: Record<string, { icon: string; color: string; }> = {
+  PushEvent: { icon: SVG.commit, color: '#3fb950' },
+  CreateEvent: { icon: SVG.commit, color: '#58a6ff' },
+  DeleteEvent: { icon: SVG.commit, color: '#f85149' },
+  IssuesEvent: { icon: SVG.issue, color: '#8957e5' },
+  IssueCommentEvent: { icon: SVG.comment, color: '#58a6ff' },
+  PullRequestEvent: { icon: SVG.pr, color: '#db6d28' },
+  PullRequestReviewEvent: { icon: SVG.pr, color: '#db6d28' },
+  PullRequestReviewCommentEvent: { icon: SVG.comment, color: '#db6d28' },
+  WatchEvent: { icon: SVG.commit, color: '#e3b341' },
+  ForkEvent: { icon: SVG.commit, color: '#58a6ff' },
+  ReleaseEvent: { icon: SVG.commit, color: '#3fb950' },
+};
+
+/** 生成用户活动 HTML */
+function userActivityHTML (username: string, items: UserActivityItem[]): string {
+  const t = getTheme();
+  const rows = items.map(item => {
+    const ev = USER_EVENT_MAP[item.type] || { icon: SVG.commit, color: t.textSub };
+    const time = fmtTime(item.time);
+    return `<div class="item">
+  <div class="item-header">
+    <span class="header-icon" style="display:inline-flex;align-items:center">${ev.icon}</span>
+    <span style="color:${ev.color};font-weight:500;font-size:12px">${esc(item.type.replace('Event', ''))}</span>
+    <span style="color:${t.textSub};font-size:12px">${esc(item.repo)}</span>
+    <span class="time">${time}</span>
+  </div>
+  <div class="msg">${esc(truncate(item.desc, 120))}</div>
+</div>`;
+  }).join('');
+
+  const userIcon = `<svg width="20" height="20" viewBox="0 0 16 16" fill="#58a6ff"><path d="M10.561 8.073a6.005 6.005 0 0 1 3.432 5.142.75.75 0 1 1-1.498.07 4.5 4.5 0 0 0-8.99 0 .75.75 0 0 1-1.498-.07 6.004 6.004 0 0 1 3.431-5.142 3.999 3.999 0 1 1 5.123 0ZM10.5 5a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z"/></svg>`;
+  return wrapHTML(username, `${username} 动态`, '#58a6ff', userIcon, items.length, rows);
+}
+
+/** 渲染用户活动 */
+export async function renderUserActivity (username: string, items: UserActivityItem[]): Promise<string | null> {
+  return renderToBase64(userActivityHTML(username, items));
+}
+
+/** 用户活动文本摘要（降级用） */
+export function userActivitySummary (username: string, items: UserActivityItem[]): string {
+  const lines = [`[${username}] ${items.length} 条新动态\n`];
+  for (const item of items) {
+    const type = item.type.replace('Event', '');
+    lines.push(`[${type}] ${item.repo}: ${item.desc.slice(0, 60)}`);
+  }
+  return lines.join('\n');
 }
