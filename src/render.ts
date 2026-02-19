@@ -635,7 +635,9 @@ const USER_EVENT_MAP: Record<string, { icon: string; color: string; }> = {
 /** 生成用户活动 HTML */
 function userActivityHTML (username: string, items: UserActivityItem[]): string {
   const t = getTheme();
-  const rows = items.map(item => {
+  const showItems = items.slice(0, 20);
+  const restItems = items.length - showItems.length;
+  const rows = showItems.map(item => {
     const ev = USER_EVENT_MAP[item.type] || { icon: SVG.commit, color: t.textSub };
     const time = fmtTime(item.time);
     return `<div class="item">
@@ -649,8 +651,9 @@ function userActivityHTML (username: string, items: UserActivityItem[]): string 
 </div>`;
   }).join('');
 
+  const extra = restItems > 0 ? `<div class="diff-more">还有 ${restItems} 条动态</div>` : '';
   const userIcon = `<svg width="20" height="20" viewBox="0 0 16 16" fill="#58a6ff"><path d="M10.561 8.073a6.005 6.005 0 0 1 3.432 5.142.75.75 0 1 1-1.498.07 4.5 4.5 0 0 0-8.99 0 .75.75 0 0 1-1.498-.07 6.004 6.004 0 0 1 3.431-5.142 3.999 3.999 0 1 1 5.123 0ZM10.5 5a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z"/></svg>`;
-  return wrapHTML(username, `${username} 动态`, '#58a6ff', userIcon, items.length, rows);
+  return wrapHTML(username, `${username} 动态`, '#58a6ff', userIcon, items.length, rows + extra);
 }
 
 /** 渲染用户活动 */
@@ -699,9 +702,17 @@ function mergedRepoHTML (repos: RepoCollectedData[]): string {
       totalCount += r.commits.length;
       const showCommits = r.commits.slice(0, 3);
       parts.push(showCommits.map(c => {
-        const msg = esc(truncate(c.commit.message.split('\n')[0], 60));
+        const msg = esc(truncate(c.commit.message.split('\n')[0], 120));
         const sha = c.sha.slice(0, 7);
-        return `<div class="item" style="padding:6px 0"><div class="item-header"><span class="sha">${sha}</span><span style="color:${t.textSub};font-size:11px">Commit</span><span class="time">${fmtTime(c.commit.author.date)}</span></div><div class="msg">${msg}</div></div>`;
+        const author = esc(c.commit.author.name);
+        let diffHtml = '';
+        if (c.files && c.files.length) {
+          const showFiles = c.files.slice(0, 3);
+          const restFiles = c.files.length - showFiles.length;
+          diffHtml = showFiles.map(f => fileDiffHTML(f)).join('');
+          if (restFiles > 0) diffHtml += `<div class="diff-more">还有 ${restFiles} 个文件变更</div>`;
+        }
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span class="sha">${sha}</span><span style="color:${t.textSub};font-size:11px">${author}</span><span class="time">${fmtTime(c.commit.author.date)}</span></div><div class="msg">${msg}</div>${diffHtml}</div>`;
       }).join(''));
       if (r.commits.length > 3) parts.push(`<div style="font-size:11px;color:${t.textMuted};padding:2px 0">还有 ${r.commits.length - 3} 条 commit</div>`);
     }
@@ -710,7 +721,8 @@ function mergedRepoHTML (repos: RepoCollectedData[]): string {
       totalCount += r.issues.length;
       parts.push(r.issues.map(i => {
         const tag = mdActionTag(i.action, i.state);
-        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#8957e5;font-size:11px">Issue #${i.number}</span>${tag}<span class="time">${fmtTime(i.created_at)}</span></div><div class="msg">${esc(truncate(i.title, 60))}</div></div>`;
+        const body = i.body ? `<div style="margin-top:4px;font-size:12px">${mdBodyToHTML(i.body, 500)}</div>` : '';
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#8957e5;font-size:11px">Issue #${i.number}</span>${tag}<span class="time">${fmtTime(i.created_at)}</span></div><div class="msg">${esc(truncate(i.title, 120))}</div>${body}</div>`;
       }).join(''));
     }
 
@@ -718,7 +730,8 @@ function mergedRepoHTML (repos: RepoCollectedData[]): string {
       totalCount += r.pulls.length;
       parts.push(r.pulls.map(p => {
         const tag = mdActionTag(p.action, p.state);
-        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#db6d28;font-size:11px">PR #${p.number}</span>${tag}<span class="time">${fmtTime(p.created_at)}</span></div><div class="msg">${esc(truncate(p.title, 60))}</div></div>`;
+        const body = p.body ? `<div style="margin-top:4px;font-size:12px">${mdBodyToHTML(p.body, 500)}</div>` : '';
+        return `<div class="item" style="padding:6px 0"><div class="item-header"><span style="color:#db6d28;font-size:11px">PR #${p.number}</span>${tag}<span class="time">${fmtTime(p.created_at)}</span></div><div class="msg">${esc(truncate(p.title, 120))}</div>${body}</div>`;
       }).join(''));
     }
 
@@ -760,11 +773,11 @@ function mergedUsersHTML (users: UserCollectedData[]): string {
 
   for (const u of users) {
     totalCount += u.items.length;
-    const rows = u.items.slice(0, 5).map(item => {
+    const rows = u.items.slice(0, 20).map(item => {
       const ev = USER_EVENT_MAP[item.type] || { icon: SVG.commit, color: t.textSub };
       return `<div class="item" style="padding:6px 0"><div class="item-header"><span class="header-icon" style="display:inline-flex;align-items:center">${ev.icon}</span><span style="color:${ev.color};font-weight:500;font-size:11px">${esc(item.type.replace('Event', ''))}</span><span style="color:${t.textSub};font-size:11px">${esc(item.repo)}</span><span class="time">${fmtTime(item.time)}</span></div><div class="msg">${esc(truncate(item.desc, 80))}</div></div>`;
     }).join('');
-    const extra = u.items.length > 5 ? `<div style="font-size:11px;color:${t.textMuted};padding:2px 0">还有 ${u.items.length - 5} 条动态</div>` : '';
+    const extra = u.items.length > 20 ? `<div style="font-size:11px;color:${t.textMuted};padding:2px 0">还有 ${u.items.length - 20} 条动态</div>` : '';
     sections.push(`<div style="margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid ${t.divider}"><div style="font-size:13px;font-weight:600;margin-bottom:6px">${esc(u.username)}</div>${rows}${extra}</div>`);
   }
 

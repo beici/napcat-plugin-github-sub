@@ -100,11 +100,11 @@ export async function fetchDefaultBranch (repo: string): Promise<string> {
 }
 
 /** 获取单个 commit 的详情（含文件变更） */
-export async function fetchCommitDetail (repo: string, sha: string): Promise<{ files?: any[]; } | null> {
+export async function fetchCommitDetail (repo: string, sha: string): Promise<{ files?: any[]; commit?: { message?: string; }; } | null> {
   const base = pluginState.config.apiBase || 'https://api.github.com';
   const url = `${base}/repos/${repo}/commits/${sha}`;
   pluginState.debug(`[GitHub] 获取 commit 详情: ${repo}@${sha.slice(0, 7)}`);
-  return await fetchJSON<{ files?: any[]; }>(url);
+  return await fetchJSON<{ files?: any[]; commit?: { message?: string; }; }>(url);
 }
 
 /** 获取仓库最近的 Actions workflow runs */

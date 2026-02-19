@@ -208,7 +208,7 @@ async function checkRepo (repo: string, branch: string, types: EventType[], grou
     const commits = extractCommits(newEvents, branch);
     pluginState.debug(`[轮询] ${repo}: 提取到 ${commits.length} 条 Commit`);
     if (commits.length) {
-      for (const c of commits) {
+      await Promise.all(commits.map(async (c) => {
         try {
           const detail = await fetchCommitDetail(repo, c.sha);
           if (detail?.files) {
@@ -218,8 +218,12 @@ async function checkRepo (repo: string, branch: string, types: EventType[], grou
               patch: f.patch || undefined,
             }));
           }
+          // 用 API 返回的真实 commit message 覆盖 fallback 消息
+          if (detail?.commit?.message && c.commit.message.startsWith('Push to ')) {
+            c.commit.message = detail.commit.message;
+          }
         } catch { /* ignore */ }
-      }
+      }));
       if (collect) { collected.commits = commits; }
       else {
         pluginState.log('info', `[${repo}] 推送 ${commits.length} 条新 Commit 到 ${groups.length} 个群`);
@@ -327,7 +331,7 @@ function extractUserActivity (events: GitHubEvent[], username: string): UserActi
     switch (ev.type) {
       case 'PushEvent': {
         const commits = (ev.payload.commits as any[]) || [];
-        const count = ev.payload.size || commits.length;
+        const count = ev.payload.size || ev.payload.distinct_size || commits.length || 1;
         const msg = commits[0]?.message?.split('\n')[0] || '';
         desc = `推送 ${count} 个 commit` + (msg ? `: ${msg}` : '');
         break;
@@ -481,27 +485,33 @@ export async function poll (): Promise<void> {
     pluginState.debug(`[定时] 开始轮询，共 ${activeSubs.length} 个仓库订阅，${activeUsers.length} 个用户监控，合并模式: ${merge}`);
     const start = Date.now();
 
-    // 收集仓库数据
+    // 并发收集仓库数据
     const repoResults: RepoCollected[] = [];
-    for (const sub of activeSubs) {
+    const repoPromises = activeSubs.map(async (sub) => {
       try {
         const result = await checkRepo(sub.repo, sub.branch, sub.types, sub.groups, merge);
-        if (merge && result) repoResults.push(result);
+        if (merge && result) return result;
       } catch (e) {
         pluginState.log('error', `轮询 ${sub.repo} 失败: ${e}`);
       }
-    }
+      return null;
+    });
+    const repoSettled = await Promise.all(repoPromises);
+    for (const r of repoSettled) { if (r) repoResults.push(r); }
 
-    // 收集用户数据
+    // 并发收集用户数据
     const userResults: UserCollected[] = [];
-    for (const userSub of activeUsers) {
+    const userPromises = activeUsers.map(async (userSub) => {
       try {
         const result = await checkUser(userSub.username, userSub.groups, merge);
-        if (merge && result) userResults.push(result);
+        if (merge && result) return result;
       } catch (e) {
         pluginState.log('error', `轮询用户 ${userSub.username} 失败: ${e}`);
       }
-    }
+      return null;
+    });
+    const userSettled = await Promise.all(userPromises);
+    for (const u of userSettled) { if (u) userResults.push(u); }
 
     // 合并模式：按群分组，合并渲染
     if (merge) {
