@@ -1,7 +1,7 @@
 // WebUI API 路由
 import type { Subscription, EventType, UserSubscription } from './types';
 import { pluginState } from './state';
-import { fetchDefaultBranch } from './github';
+import { fetchDefaultBranch, fetchBranches } from './github';
 import { stopPoller, startPoller } from './poller';
 
 export function registerApiRoutes (router: any): void {
@@ -74,53 +74,103 @@ export function registerApiRoutes (router: any): void {
     res.json({ success: true });
   });
 
-  // 添加订阅
+  // 获取仓库分支列表
+  router.postNoAuth('/repo/branches', async (req: any, res: any) => {
+    const repo = ((req.body as any)?.repo as string || '').trim().toLowerCase();
+    if (!repo || !repo.includes('/')) { res.json({ success: false, error: '仓库格式错误' }); return; }
+    try {
+      const branches = await fetchBranches(repo);
+      if (!branches.length) { res.json({ success: false, error: '未找到分支，请检查仓库名是否正确' }); return; }
+      res.json({ success: true, data: branches });
+    } catch (e) {
+      res.json({ success: false, error: String(e) });
+    }
+  });
+
+  // 添加订阅（支持单分支 branch 或多分支 branches 数组）
   router.postNoAuth('/sub/add', async (req: any, res: any) => {
-    const { repo: rawRepo, types, groups } = req.body as { repo?: string; types?: string[]; groups?: string[]; };
+    const { repo: rawRepo, types, groups, branch: specifiedBranch, branches: specifiedBranches } = req.body as {
+      repo?: string; types?: string[]; groups?: string[];
+      branch?: string; branches?: string[];
+    };
     const repo = rawRepo?.trim().toLowerCase();
     if (!repo || !repo.includes('/')) { res.json({ success: false, error: '仓库格式错误，请使用 owner/repo' }); return; }
-
-    const existing = pluginState.config.subscriptions.find(s => s.repo.toLowerCase() === repo);
-    if (existing) { res.json({ success: false, error: '该仓库已订阅' }); return; }
 
     const validTypes: EventType[] = (types || ['commits', 'issues', 'pulls']).filter(t =>
       ['commits', 'issues', 'pulls', 'actions'].includes(t)
     ) as EventType[];
 
-    let branch = 'main';
-    try { branch = await fetchDefaultBranch(repo); } catch { /* use default */ }
+    // 收集要订阅的分支列表
+    let branchList: string[] = [];
+    if (specifiedBranches && Array.isArray(specifiedBranches) && specifiedBranches.length) {
+      branchList = specifiedBranches.map(b => b.trim()).filter(Boolean);
+    } else if (specifiedBranch?.trim()) {
+      branchList = [specifiedBranch.trim()];
+    }
+    if (!branchList.length) {
+      try { branchList = [await fetchDefaultBranch(repo)]; } catch { branchList = ['main']; }
+    }
 
-    const sub: Subscription = {
-      repo, branch, types: validTypes,
-      groups: groups || [],
-      enabled: true,
-      createdAt: new Date().toISOString(),
-    };
-    pluginState.config.subscriptions.push(sub);
+    // 过滤已订阅的分支
+    const skipped: string[] = [];
+    const toAdd: string[] = [];
+    for (const b of branchList) {
+      if (pluginState.config.subscriptions.some(s => s.repo.toLowerCase() === repo && s.branch === b)) {
+        skipped.push(b);
+      } else {
+        toAdd.push(b);
+      }
+    }
+    if (!toAdd.length) {
+      res.json({ success: false, error: `所选分支均已订阅: ${skipped.join(', ')}` });
+      return;
+    }
+
+    const added: Subscription[] = [];
+    for (const branch of toAdd) {
+      const sub: Subscription = {
+        repo, branch, types: validTypes,
+        groups: groups || [],
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      };
+      pluginState.config.subscriptions.push(sub);
+      added.push(sub);
+    }
     pluginState.saveConfig();
     stopPoller();
     startPoller();
-    res.json({ success: true, data: sub });
+    const msg = skipped.length ? `已添加 ${toAdd.join(', ')}，跳过已订阅: ${skipped.join(', ')}` : undefined;
+    res.json({ success: true, data: added.length === 1 ? added[0] : added, message: msg });
   });
 
   // 更新订阅
   router.postNoAuth('/sub/update', (req: any, res: any) => {
-    const { repo, types, groups, enabled, branch } = req.body as Partial<Subscription> & { repo: string; };
-    const sub = pluginState.config.subscriptions.find(s => s.repo === repo);
+    const body = req.body as Record<string, any>;
+    const repo = body.repo as string;
+    const oldBranch = body.oldBranch as string | undefined;
+    const newBranch = body.branch as string | undefined;
+    const types = body.types as EventType[] | undefined;
+    const groups = body.groups as string[] | undefined;
+    const enabled = body.enabled as boolean | undefined;
+
+    // 用 oldBranch 精确定位原订阅，fallback 到 newBranch
+    const matchBranch = oldBranch || newBranch;
+    const sub = pluginState.config.subscriptions.find(s => s.repo === repo && (!matchBranch || s.branch === matchBranch));
     if (!sub) { res.json({ success: false, error: '未找到该订阅' }); return; }
 
     if (types) sub.types = types;
     if (groups) sub.groups = groups;
     if (enabled !== undefined) sub.enabled = enabled;
-    if (branch) sub.branch = branch;
+    if (newBranch) sub.branch = newBranch;
     pluginState.saveConfig();
     res.json({ success: true, data: sub });
   });
 
   // 删除订阅
   router.postNoAuth('/sub/delete', (req: any, res: any) => {
-    const { repo } = req.body as { repo?: string; };
-    const idx = pluginState.config.subscriptions.findIndex(s => s.repo === repo);
+    const { repo, branch } = req.body as { repo?: string; branch?: string; };
+    const idx = pluginState.config.subscriptions.findIndex(s => s.repo === repo && (!branch || s.branch === branch));
     if (idx === -1) { res.json({ success: false, error: '未找到该订阅' }); return; }
     pluginState.config.subscriptions.splice(idx, 1);
     pluginState.saveConfig();
@@ -197,8 +247,8 @@ export function registerApiRoutes (router: any): void {
 
   // 切换订阅开关
   router.postNoAuth('/sub/toggle', (req: any, res: any) => {
-    const { repo } = req.body as { repo?: string; };
-    const sub = pluginState.config.subscriptions.find(s => s.repo === repo);
+    const { repo, branch } = req.body as { repo?: string; branch?: string; };
+    const sub = pluginState.config.subscriptions.find(s => s.repo === repo && (!branch || s.branch === branch));
     if (!sub) { res.json({ success: false, error: '未找到该订阅' }); return; }
     sub.enabled = !sub.enabled;
     pluginState.saveConfig();

@@ -696,6 +696,40 @@
       border-color: var(--accent);
       color: var(--accent)
     }
+
+    .branch-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background .15s;
+      font-size: 13px
+    }
+
+    .branch-item:hover {
+      background: rgba(31, 111, 235, .06)
+    }
+
+    .branch-item .branch-default {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: rgba(26, 127, 55, .1);
+      color: var(--green);
+      font-weight: 500
+    }
+
+    .dark .branch-item .branch-default {
+      background: rgba(63, 185, 80, .12);
+      color: var(--greend)
+    }
+
+    .dark #branch-list-wrap {
+      background: rgba(22, 27, 34, .6);
+      border-color: var(--borderd)
+    }
   </style>
 </head>
 
@@ -1157,7 +1191,20 @@
             <div class="cfg-sec">
               <div style="margin-bottom:12px">
                 <label style="font-size:12px;color:var(--text2)">仓库地址</label>
-                <input type="text" id="add-repo" class="ipt" placeholder="owner/repo，如 torvalds/linux">
+                <div style="display:flex;gap:8px">
+                  <input type="text" id="add-repo" class="ipt" placeholder="owner/repo，如 torvalds/linux" style="flex:1">
+                  <button class="btn btn-s" id="fetch-branches-btn" onclick="fetchBranchList()">获取分支</button>
+                </div>
+              </div>
+              <div style="margin-bottom:12px">
+                <label style="font-size:12px;color:var(--text2)">选择分支（输入仓库地址后点击「获取分支」，或手动输入）</label>
+                <div id="branch-picker-area">
+                  <input type="text" id="add-branch" class="ipt" placeholder="手动输入分支名，留空则自动获取默认分支">
+                </div>
+                <div id="branch-list-wrap"
+                  style="display:none;margin-top:8px;max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:6px;background:#fff">
+                </div>
+                <p id="branch-hint" style="font-size:11px;color:var(--text3);margin-top:4px;display:none"></p>
               </div>
               <div style="margin-bottom:12px">
                 <label style="font-size:12px;color:var(--text2)">监控类型</label>
@@ -1619,9 +1666,9 @@
           </div>
         </div>
         <div style="display:flex;gap:4px">
-          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="editSub('${esc(s.repo)}')">编辑</button>
-          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="toggleSub('${esc(s.repo)}')">${s.enabled ? '关闭' : '开启'}</button>
-          <button class="btn btn-d" style="font-size:11px;padding:4px 10px" onclick="deleteSub('${esc(s.repo)}')">删除</button>
+          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="editSub('${esc(s.repo)}','${esc(s.branch || 'main')}')">编辑</button>
+          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="toggleSub('${esc(s.repo)}','${esc(s.branch || 'main')}')">${s.enabled ? '关闭' : '开启'}</button>
+          <button class="btn btn-d" style="font-size:11px;padding:4px 10px" onclick="deleteSub('${esc(s.repo)}','${esc(s.branch || 'main')}')">删除</button>
         </div>
       </div>
     </div>`;
@@ -1658,13 +1705,64 @@
       else toast('保存失败: ' + (d.error || ''), 'error');
     }
 
+    // ===== 分支选择 =====
+    let fetchedBranches = []; // { name, isDefault }
+    let selectedBranches = new Set();
+
+    async function fetchBranchList () {
+      const repo = $('add-repo').value.trim().toLowerCase();
+      if (!repo) { toast('请先输入仓库地址', 'error'); return; }
+      if (!repo.includes('/')) { toast('格式错误，请使用 owner/repo', 'error'); return; }
+      const btn = $('fetch-branches-btn');
+      btn.textContent = '加载中...';
+      btn.disabled = true;
+      try {
+        const d = await api('/repo/branches', { repo });
+        if (d.success && d.data && d.data.length) {
+          fetchedBranches = d.data;
+          selectedBranches = new Set();
+          // 默认选中默认分支
+          const def = fetchedBranches.find(b => b.isDefault);
+          if (def) selectedBranches.add(def.name);
+          renderBranchPicker();
+          $('branch-list-wrap').style.display = 'block';
+          $('add-branch').style.display = 'none';
+          $('branch-hint').style.display = 'block';
+          $('branch-hint').textContent = `共 ${fetchedBranches.length} 个分支，可多选`;
+          toast(`获取到 ${fetchedBranches.length} 个分支`, 'success');
+        } else {
+          toast('获取分支失败: ' + (d.error || '无分支'), 'error');
+          $('branch-list-wrap').style.display = 'none';
+          $('add-branch').style.display = '';
+          $('branch-hint').style.display = 'none';
+        }
+      } catch (e) {
+        toast('获取分支失败: ' + e, 'error');
+      } finally {
+        btn.textContent = '获取分支';
+        btn.disabled = false;
+      }
+    }
+
+    function renderBranchPicker () {
+      const wrap = $('branch-list-wrap');
+      wrap.innerHTML = fetchedBranches.map(b => {
+        const checked = selectedBranches.has(b.name) ? 'checked' : '';
+        const defBadge = b.isDefault ? ' <span class="branch-default">默认</span>' : '';
+        return `<label class="branch-item"><input type="checkbox" class="chk" ${checked} onchange="toggleBranch('${esc(b.name)}', this.checked)"> ${esc(b.name)}${defBadge}</label>`;
+      }).join('');
+    }
+
+    function toggleBranch (name, checked) {
+      if (checked) selectedBranches.add(name);
+      else selectedBranches.delete(name);
+    }
+
     // ===== 添加订阅 =====
     async function addSub () {
       const repo = $('add-repo').value.trim().toLowerCase();
       if (!repo) { toast('请输入仓库地址', 'error'); return; }
       if (!repo.includes('/')) { toast('格式错误，请使用 owner/repo', 'error'); return; }
-      // 前端去重
-      if (SUBS.some(s => s.repo.toLowerCase() === repo)) { toast('该仓库已订阅，请勿重复添加', 'error'); return; }
       const types = [];
       if ($('add-commits').checked) types.push('commits');
       if ($('add-issues').checked) types.push('issues');
@@ -1672,10 +1770,27 @@
       if ($('add-actions').checked) types.push('actions');
       if (!types.length) { toast('请至少选择一种监控类型', 'error'); return; }
       const groups = addPicker ? addPicker.getSelected() : [];
-      const d = await api('/sub/add', { repo, types, groups });
+      const body = { repo, types, groups };
+      // 如果用了分支选择器且有选中的分支
+      if (fetchedBranches.length && selectedBranches.size) {
+        body.branches = Array.from(selectedBranches);
+      } else {
+        // 手动输入的分支
+        const branch = $('add-branch').value.trim();
+        if (branch) body.branch = branch;
+      }
+      const d = await api('/sub/add', body);
       if (d.success) {
-        toast('订阅添加成功', 'success');
+        const msg = d.message || '订阅添加成功';
+        toast(msg, 'success');
         $('add-repo').value = '';
+        $('add-branch').value = '';
+        $('add-branch').style.display = '';
+        $('branch-list-wrap').style.display = 'none';
+        $('branch-list-wrap').innerHTML = '';
+        $('branch-hint').style.display = 'none';
+        fetchedBranches = [];
+        selectedBranches = new Set();
         if (addPicker) addPicker.setSelected([]);
         await loadAll();
         document.querySelectorAll('.sb')[2]?.click();
@@ -1683,8 +1798,8 @@
     }
 
     // ===== 切换/删除 =====
-    async function toggleSub (repo) {
-      const d = await api('/sub/toggle', { repo });
+    async function toggleSub (repo, branch) {
+      const d = await api('/sub/toggle', { repo, branch });
       if (d.success) { toast(d.enabled ? '已开启' : '已关闭', 'success'); await loadAll(); }
       else toast('操作失败', 'error');
     }
@@ -1702,17 +1817,17 @@
       if (_confirmCb) { _confirmCb(val); _confirmCb = null; }
     }
 
-    async function deleteSub (repo) {
-      const ok = await customConfirm('确定删除订阅 ' + repo + ' ？');
+    async function deleteSub (repo, branch) {
+      const ok = await customConfirm('确定删除订阅 ' + repo + ' (' + branch + ') ？');
       if (!ok) return;
-      const d = await api('/sub/delete', { repo });
+      const d = await api('/sub/delete', { repo, branch });
       if (d.success) { toast('已删除', 'success'); await loadAll(); }
       else toast('删除失败', 'error');
     }
 
     // ===== 编辑订阅 =====
-    function editSub (repo) {
-      const sub = SUBS.find(s => s.repo === repo); if (!sub) return;
+    function editSub (repo, branch) {
+      const sub = SUBS.find(s => s.repo === repo && s.branch === branch); if (!sub) return;
       $('edit-repo').value = sub.repo;
       $('edit-branch').value = sub.branch || 'main';
       $('edit-commits').checked = (sub.types || []).includes('commits');
@@ -1720,11 +1835,13 @@
       $('edit-pulls').checked = (sub.types || []).includes('pulls');
       $('edit-actions').checked = (sub.types || []).includes('actions');
       editPicker = createGroupPicker('edit-grp-picker', sub.groups || []);
+      $('editModal').dataset.oldBranch = sub.branch || 'main';
       $('editModal').classList.add('show');
     }
     function closeEdit () { $('editModal').classList.remove('show'); }
     async function saveEdit () {
       const repo = $('edit-repo').value;
+      const oldBranch = $('editModal').dataset.oldBranch || '';
       const types = [];
       if ($('edit-commits').checked) types.push('commits');
       if ($('edit-issues').checked) types.push('issues');
@@ -1732,7 +1849,7 @@
       if ($('edit-actions').checked) types.push('actions');
       const groups = editPicker ? editPicker.getSelected() : [];
       const branch = $('edit-branch').value.trim() || 'main';
-      const d = await api('/sub/update', { repo, types, groups, branch });
+      const d = await api('/sub/update', { repo, oldBranch, types, groups, branch });
       if (d.success) { toast('订阅已更新', 'success'); closeEdit(); await loadAll(); }
       else toast('更新失败: ' + (d.error || ''), 'error');
     }

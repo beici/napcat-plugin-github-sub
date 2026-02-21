@@ -41,9 +41,9 @@ export async function handleCommand (event: OB11Message, cmd: string, ctx: NapCa
     );
     if (canSub(userId)) {
       lines.push(
-        `${prefix} 订阅 <owner/repo>`,
-        `${prefix} 取消 <owner/repo>`,
-        `${prefix} 开启/关闭 <owner/repo>`,
+        `${prefix} 订阅 <owner/repo> [分支名]`,
+        `${prefix} 取消 <owner/repo> [分支名]`,
+        `${prefix} 开启/关闭 <owner/repo> [分支名]`,
         `${prefix} 关注 <username>`,
         `${prefix} 取关 <username>`,
         `${prefix} 关注列表`,
@@ -54,14 +54,15 @@ export async function handleCommand (event: OB11Message, cmd: string, ctx: NapCa
     return true;
   }
 
-  // gh 订阅 owner/repo
-  const subMatch = cmd.match(/^订阅\s+([^\s]+)$/);
+  // gh 订阅 owner/repo [branch]
+  const subMatch = cmd.match(/^订阅\s+([^\s]+)(?:\s+([^\s]+))?$/);
   if (subMatch) {
     if (!canSub(userId)) {
       await sendReply(event, '❌ 该指令仅主人可触发', ctx);
       return true;
     }
     const repo = subMatch[1];
+    const specifiedBranch = subMatch[2] || '';
     if (!repo.includes('/')) {
       await sendReply(event, '❌ 格式错误，请使用 owner/repo 格式', ctx);
       return true;
@@ -69,18 +70,18 @@ export async function handleCommand (event: OB11Message, cmd: string, ctx: NapCa
 
     const types: EventType[] = ['commits', 'issues', 'pulls'];
 
-    const existing = pluginState.config.subscriptions.find(s => s.repo === repo);
+    const branch = specifiedBranch || await fetchDefaultBranch(repo);
+
+    const existing = pluginState.config.subscriptions.find(s => s.repo === repo && s.branch === branch);
     if (existing) {
       if (groupId && !existing.groups.includes(groupId)) {
         existing.groups.push(groupId);
       }
       existing.enabled = true;
       pluginState.saveConfig();
-      await sendReply(event, `✅ 已更新订阅 ${repo}\n推送群: ${existing.groups.join(', ')}`, ctx);
+      await sendReply(event, `✅ 已更新订阅 ${repo} (${branch})\n推送群: ${existing.groups.join(', ')}`, ctx);
       return true;
     }
-
-    const branch = await fetchDefaultBranch(repo);
     const sub: Subscription = {
       repo, branch, types,
       groups: groupId ? [groupId] : [],
@@ -93,33 +94,37 @@ export async function handleCommand (event: OB11Message, cmd: string, ctx: NapCa
     return true;
   }
 
-  // gh 取消 owner/repo
-  const unsubMatch = cmd.match(/^取消\s+([^\s]+)$/);
+  // gh 取消 owner/repo [branch]
+  const unsubMatch = cmd.match(/^取消\s+([^\s]+)(?:\s+([^\s]+))?$/);
   if (unsubMatch) {
     if (!canSub(userId)) {
       await sendReply(event, '❌ 该指令仅主人可触发', ctx);
       return true;
     }
     const repo = unsubMatch[1];
-    const idx = pluginState.config.subscriptions.findIndex(s => s.repo === repo);
-    if (idx === -1) {
-      await sendReply(event, `❌ 未找到订阅 ${repo}`, ctx);
+    const branch = unsubMatch[2] || '';
+    // 如果指定了分支，精确匹配；否则匹配所有该仓库的订阅
+    const matches = pluginState.config.subscriptions.filter(s =>
+      s.repo === repo && (!branch || s.branch === branch)
+    );
+    if (!matches.length) {
+      await sendReply(event, `❌ 未找到订阅 ${repo}${branch ? ` (${branch})` : ''}`, ctx);
       return true;
     }
-    if (groupId) {
-      const sub = pluginState.config.subscriptions[idx];
-      sub.groups = sub.groups.filter(g => g !== groupId);
-      if (sub.groups.length === 0) {
-        pluginState.config.subscriptions.splice(idx, 1);
-        await sendReply(event, `✅ 已完全取消订阅 ${repo}`, ctx);
+    for (const sub of matches) {
+      const idx = pluginState.config.subscriptions.indexOf(sub);
+      if (groupId) {
+        sub.groups = sub.groups.filter(g => g !== groupId);
+        if (sub.groups.length === 0) {
+          pluginState.config.subscriptions.splice(idx, 1);
+        }
       } else {
-        await sendReply(event, `✅ 已从本群取消订阅 ${repo}（其他群仍在推送）`, ctx);
+        pluginState.config.subscriptions.splice(idx, 1);
       }
-    } else {
-      pluginState.config.subscriptions.splice(idx, 1);
-      await sendReply(event, `✅ 已取消订阅 ${repo}`, ctx);
     }
     pluginState.saveConfig();
+    const label = `${repo}${branch ? ` (${branch})` : ''}`;
+    await sendReply(event, `✅ 已取消订阅 ${label}`, ctx);
     return true;
   }
 
@@ -151,8 +156,8 @@ export async function handleCommand (event: OB11Message, cmd: string, ctx: NapCa
     return true;
   }
 
-  // gh 开启/关闭 owner/repo
-  const toggleMatch = cmd.match(/^(开启|关闭)\s+([^\s]+)$/);
+  // gh 开启/关闭 owner/repo [branch]
+  const toggleMatch = cmd.match(/^(开启|关闭)\s+([^\s]+)(?:\s+([^\s]+))?$/);
   if (toggleMatch) {
     if (!canSub(userId)) {
       await sendReply(event, '❌ 该指令仅主人可触发', ctx);
@@ -160,14 +165,18 @@ export async function handleCommand (event: OB11Message, cmd: string, ctx: NapCa
     }
     const enable = toggleMatch[1] === '开启';
     const repo = toggleMatch[2];
-    const sub = pluginState.config.subscriptions.find(s => s.repo === repo);
-    if (!sub) {
-      await sendReply(event, `❌ 未找到订阅 ${repo}`, ctx);
+    const branch = toggleMatch[3] || '';
+    const matches = pluginState.config.subscriptions.filter(s =>
+      s.repo === repo && (!branch || s.branch === branch)
+    );
+    if (!matches.length) {
+      await sendReply(event, `❌ 未找到订阅 ${repo}${branch ? ` (${branch})` : ''}`, ctx);
       return true;
     }
-    sub.enabled = enable;
+    for (const sub of matches) sub.enabled = enable;
     pluginState.saveConfig();
-    await sendReply(event, `✅ ${repo} 已${enable ? '开启' : '关闭'}`, ctx);
+    const label = `${repo}${branch ? ` (${branch})` : ''}`;
+    await sendReply(event, `✅ ${label} 已${enable ? '开启' : '关闭'}`, ctx);
     return true;
   }
 

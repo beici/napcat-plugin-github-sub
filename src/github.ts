@@ -99,6 +99,22 @@ export async function fetchDefaultBranch (repo: string): Promise<string> {
   return branch;
 }
 
+/** 获取仓库分支列表 */
+export async function fetchBranches (repo: string, perPage = 100): Promise<{ name: string; isDefault: boolean; }[]> {
+  const base = pluginState.config.apiBase || 'https://api.github.com';
+  pluginState.debug(`[GitHub] 获取分支列表: ${repo}`);
+  const [repoData, branches] = await Promise.all([
+    fetchJSON<{ default_branch: string; }>(`${base}/repos/${repo}`),
+    fetchJSON<{ name: string; }[]>(`${base}/repos/${repo}/branches?per_page=${perPage}`),
+  ]);
+  const defaultBranch = repoData?.default_branch || 'main';
+  const list = (branches || []).map(b => ({ name: b.name, isDefault: b.name === defaultBranch }));
+  // 默认分支排在最前面
+  list.sort((a, b) => (a.isDefault ? -1 : 0) - (b.isDefault ? -1 : 0));
+  pluginState.debug(`[GitHub] ${repo}: ${list.length} 个分支，默认: ${defaultBranch}`);
+  return list;
+}
+
 /** 获取单个 commit 的详情（含文件变更） */
 export async function fetchCommitDetail (repo: string, sha: string): Promise<{ files?: any[]; commit?: { message?: string; }; } | null> {
   const base = pluginState.config.apiBase || 'https://api.github.com';

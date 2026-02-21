@@ -162,7 +162,7 @@ interface UserCollected {
 }
 
 async function checkRepo (repo: string, branch: string, types: EventType[], groups: string[], collect?: boolean): Promise<RepoCollected | null> {
-  const cacheKey = repo;
+  const cacheKey = `${repo}:${branch}`;
   const collected: RepoCollected = { repo, groups, commits: [], issues: [], pulls: [], comments: [], actions: [] };
   pluginState.debug(`[轮询] 检查仓库: ${repo} (分支: ${branch}, 类型: ${types.join(',')}, 群: ${groups.join(',')})`);
 
