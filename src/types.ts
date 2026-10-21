@@ -31,8 +31,10 @@ export interface UserActivityItem {
 export interface Subscription {
   /** 仓库全名 owner/repo */
   repo: string;
-  /** 监控的分支（commits 用） */
+  /** 监控的分支（commits 用）；多分支订阅时每个分支各存一条记录 */
   branch: string;
+  /** 订阅别名，用于推送展示；留空则回退到 repo */
+  alias?: string;
   /** 监控类型 */
   types: EventType[];
   /** 推送的群列表 */
@@ -41,6 +43,28 @@ export interface Subscription {
   enabled: boolean;
   /** 添加时间 */
   createdAt: string;
+}
+
+/** AI 更新摘要（LLM）配置 */
+export interface LLMConfig {
+  /** 是否启用 */
+  enabled: boolean;
+  /** OpenAI 兼容接口的 base URL */
+  apiBase: string;
+  /** API Key */
+  apiKey: string;
+  /** 模型名 */
+  model: string;
+  /** 单次生成的最大 token 数 */
+  maxTokens: number;
+  /** 请求超时（毫秒） */
+  timeout: number;
+  /** 采样温度 */
+  temperature: number;
+  /** 喂给模型的最大 diff 字符数，控制成本 */
+  maxDiffChars: number;
+  /** 自定义系统提示词，留空用内置的 */
+  prompt: string;
 }
 
 export interface ThemeColors {
@@ -75,6 +99,12 @@ export interface PluginConfig {
   apiBase: string;
   /** 轮询间隔（秒） */
   interval: number;
+  /**
+   * commits 的探测数据源
+   * - `commits`（默认）：走 /repos/{repo}/commits ，数据新鲜、严格按时间排序
+   * - `events`：走 /repos/{repo}/events ，兼容旧行为，但数据滞后且可能乱序
+   */
+  commitSource?: 'commits' | 'events';
   /** 调试模式 */
   debug: boolean;
   /** 主人 QQ 号列表 */
@@ -98,6 +128,8 @@ export interface PluginConfig {
   autoDetectRepo: boolean;
   /** 合并推送模式：每轮轮询将所有仓库更新合并成一张图，用户更新合并成另一张图 */
   mergeNotify: boolean;
+  /** AI 更新摘要配置 */
+  llm?: LLMConfig;
   /** 订阅列表 */
   subscriptions: Subscription[];
   /** 用户监控列表 */
@@ -209,20 +241,17 @@ export interface ActionRunData {
   run_number: number;
 }
 
-/** GitHub 仓库信息 */
-export interface RepoInfo {
-  full_name: string;
-  description: string | null;
+/** GitHub Commits API 返回的单条提交 */
+export interface GitHubCommitItem {
+  sha: string;
+  commit: {
+    message: string;
+    author: { name: string; date: string; } | null;
+    committer: { name: string; date: string; } | null;
+  };
+  author: { login: string; avatar_url: string; } | null;
+  committer: { login: string; avatar_url: string; } | null;
   html_url: string;
-  stargazers_count: number;
-  forks_count: number;
-  open_issues_count: number;
-  language: string | null;
-  license: { name: string; } | null;
-  owner: { login: string; avatar_url: string; };
-  created_at: string;
-  updated_at: string;
-  topics: string[];
-  default_branch: string;
+  parents: { sha: string; }[];
 }
 

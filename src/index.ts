@@ -7,14 +7,69 @@ import type { PluginConfig } from './types';
 import { DEFAULT_CONFIG } from './config';
 import { pluginState } from './state';
 import { handleCommand } from './commands';
-import { registerApiRoutes } from './api';
+import { registerApiRoutes, syncPoller, seedPollKey } from './api';
 import { startPoller, stopPoller } from './poller';
-import { fetchRepoInfo, fetchReadme } from './github';
+import { flushSummaries } from './llm';
+import { fetchRepoInfo, fetchReadme, normalizeRepo } from './github';
 import { renderRepoCard, repoSummary } from './render';
 
 export let plugin_config_ui: PluginConfigSchema = [];
 
 const PREFIX = 'gh';
+
+/**
+ * 自动识别仓库链接的限流状态。
+ *
+ * 原实现完全没有限制：任何人发一条含 github.com 链接的消息就触发
+ * 2 次 GitHub API + 1 次 puppeteer 渲染 + 1 次图片上传。
+ * 几十条消息能打光 5000/h 配额，或把 puppeteer 打满导致正常订阅推送也渲染失败。
+ */
+const AUTO_DETECT_PER_KEY_MS = 30_000;
+const AUTO_DETECT_GLOBAL_PER_MIN = 20;
+const autoDetectLastAt = new Map<string, number>();
+const autoDetectGlobal: number[] = [];
+
+function checkAutoDetectRate (key: string): boolean {
+  const now = Date.now();
+  // 单群/单用户冷却
+  const last = autoDetectLastAt.get(key) || 0;
+  if (now - last < AUTO_DETECT_PER_KEY_MS) return false;
+
+  // 全局每分钟上限：先清掉窗口外的记录
+  while (autoDetectGlobal.length && now - autoDetectGlobal[0] > 60_000) autoDetectGlobal.shift();
+  if (autoDetectGlobal.length >= AUTO_DETECT_GLOBAL_PER_MIN) return false;
+
+  autoDetectLastAt.set(key, now);
+  autoDetectGlobal.push(now);
+
+  // 防止 Map 无限增长：超过 1000 个 key 时清掉过期的
+  if (autoDetectLastAt.size > 1000) {
+    for (const [k, t] of autoDetectLastAt) {
+      if (now - t > AUTO_DETECT_PER_KEY_MS) autoDetectLastAt.delete(k);
+    }
+  }
+  return true;
+}
+
+/**
+ * 订阅状态的轻量指纹，用来判断一条指令是否真的改了订阅。
+ * 只取影响轮询行为的字段，避免 groups/alias 之类的展示性修改也触发重启。
+ */
+function subscriptionFingerprint (): string {
+  // 全部字段防御式取值：配置被手改成非数组、或者某条订阅缺 types 时，
+  // 这里原来会直接抛 TypeError，而它是在 onmessage 里被调的（async 回调），
+  // 未捕获的 rejection 在 Node 15+ 默认会直接退出进程。
+  const list = Array.isArray(pluginState.config.subscriptions) ? pluginState.config.subscriptions : [];
+  const subs = list
+    .map(s => `${s?.repo || ''}|${s?.branch || ''}|${(Array.isArray(s?.types) ? s.types : []).join(',')}|${s?.enabled ? 1 : 0}`)
+    .sort()
+    .join(';');
+  const users = (Array.isArray(pluginState.config.userSubscriptions) ? pluginState.config.userSubscriptions : [])
+    .map(u => `${u?.username || ''}|${u?.enabled ? 1 : 0}`)
+    .sort()
+    .join(';');
+  return `${subs}#${users}`;
+}
 
 // 初始化
 const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext) => {
@@ -78,8 +133,33 @@ const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext
   if (fs.existsSync(ctx.configPath)) {
     try {
       const raw = JSON.parse(fs.readFileSync(ctx.configPath, 'utf-8'));
-      pluginState.config = { ...DEFAULT_CONFIG, ...raw, subscriptions: raw.subscriptions || [], userSubscriptions: raw.userSubscriptions || [], owners: raw.owners || [], tokens: raw.tokens || [] };
-    } catch { /* ignore */ }
+      // 配置被手改坏或写盘中断时，subscriptions 可能不是数组。
+      // 不校验的话后面 .filter/.push 全都会抛，而 plugin_init 抛错
+      // 会让整个插件加载失败——用户只能看到「插件未加载」。
+      pluginState.config = {
+        ...DEFAULT_CONFIG,
+        ...raw,
+        // llm 要深合并：旧配置文件里没有新字段时，不能被整块覆盖掉
+        llm: { ...DEFAULT_CONFIG.llm!, ...(raw.llm || {}) },
+        subscriptions: Array.isArray(raw.subscriptions) ? raw.subscriptions : [],
+        userSubscriptions: Array.isArray(raw.userSubscriptions) ? raw.userSubscriptions : [],
+        owners: Array.isArray(raw.owners) ? raw.owners : [],
+        tokens: Array.isArray(raw.tokens) ? raw.tokens : [],
+      };
+    } catch (e) {
+      // 原来这里是 `catch { /* ignore */ }`：配置解析失败就静默用默认值启动，
+      // 然后任何一次 saveConfig 都会把「空配置」写回磁盘 ——
+      // 用户的所有订阅、Token、别名一次性永久丢失，且日志里毫无线索。
+      // 现在先备份坏文件，再明确报错。
+      pluginState.log('error', `配置文件解析失败: ${e}`);
+      const bak = `${ctx.configPath}.corrupt-${Date.now()}`;
+      try {
+        fs.copyFileSync(ctx.configPath, bak);
+        pluginState.log('warn', `已备份损坏的配置文件到 ${bak}，本次以默认配置启动`);
+      } catch (e2) {
+        pluginState.log('error', `备份损坏配置失败: ${e2}`);
+      }
+    }
   }
 
   // 确保数据目录
@@ -90,7 +170,10 @@ const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext
 
   // 检测 Puppeteer 渲染服务
   try {
-    const port = pluginState.config.webuiPort || 6099;
+    // 与 renderToBase64 保持同一套端口推导：httpPort 是 NapCat 实际监听端口，
+    // 只读 webuiPort 时，没配 webuiPort 的部署会去探测 6099 拿到 404/503，
+    // 日志里就一直挂着「图片推送将降级为文本」，但实际渲染可能是好的。
+    const port = pluginState.httpPort || pluginState.config.webuiPort || 6099;
     const res = await fetch(`http://127.0.0.1:${port}/plugin/napcat-plugin-puppeteer/api/status`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       pluginState.log('info', `Puppeteer 渲染服务已连接 (端口: ${port})`);
@@ -105,6 +188,9 @@ const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext
   if (pluginState.config.subscriptions.length > 0 || (pluginState.config.userSubscriptions || []).length > 0) {
     startPoller();
   }
+  // 记下启动时的配置快照：WebUI 首次打开会自动保存一次，
+  // 不记的话那次保存会被判定为「轮询相关字段变了」而白白重启一轮
+  seedPollKey();
 
   const userCount = (pluginState.config.userSubscriptions || []).length;
   pluginState.log('info', `GitHub 订阅插件初始化完成，${pluginState.config.subscriptions.length} 个仓库订阅，${userCount} 个用户监控`);
@@ -119,38 +205,64 @@ export const plugin_set_config = async (_ctx: NapCatPluginContext, _config: Plug
 // 清理
 const plugin_cleanup: PluginModule['plugin_cleanup'] = async () => {
   stopPoller();
-  pluginState.saveCache();
+  // 清零快照：插件重载后是新的模块实例，但同一进程里热重载可能复用，
+  // 不清零会导致「重载后第一次保存配置不生效」
+  seedPollKey();
+  // 等在后台跑的 AI 摘要收尾，否则可能往已关闭的 logger 里写东西
+  await flushSummaries();
+  // 用 Now 版本：卸载后微任务未必还有机会执行
+  pluginState.saveCacheNow();
   pluginState.log('info', 'GitHub 订阅插件已卸载');
 };
 
 // 消息处理
 const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPluginContext, event: OB11Message) => {
-  if (event.post_type !== 'message') return;
-  const raw = (event.raw_message || '').trim();
-
-  // 匹配前缀指令
-  const match = raw.match(new RegExp(`^${PREFIX}\\s*(.*)`, 'is'));
-  if (match) {
-    const cmd = match[1].trim();
-    const handled = await handleCommand(event, cmd, ctx);
-
-    // 如果添加了新订阅且轮询未启动，启动轮询
-    if (handled && (pluginState.config.subscriptions.length > 0 || (pluginState.config.userSubscriptions || []).length > 0)) {
-      stopPoller();
-      startPoller();
-    }
-    return;
-  }
-
-  // 自动识别 GitHub 仓库链接
-  if (!pluginState.config.autoDetectRepo) return;
-  const repoMatch = raw.match(/https?:\/\/github\.com\/([a-zA-Z0-9\-_.]+\/[a-zA-Z0-9\-_.]+)/);
-  if (!repoMatch) return;
-
-  const repoName = repoMatch[1].replace(/\.git$/, '');
-  pluginState.debug(`[自动识别] 检测到 GitHub 仓库链接: ${repoName}`);
-
+  // 整个函数体必须包 try/catch：这是 async 事件回调，抛出的 rejection
+  // 没有任何人接。Node 15+ 默认 `--unhandled-rejections=throw`，一条畸形
+  // 配置（subscriptions 被手改成对象）就能让整个 NapCat 进程退出。
   try {
+    if (event.post_type !== 'message') return;
+    const raw = (event.raw_message || '').trim();
+
+    // 匹配前缀指令
+    const match = raw.match(new RegExp(`^${PREFIX}\\s*(.*)`, 'is'));
+    if (match) {
+      const cmd = match[1].trim();
+      // 记录执行前后订阅状态，只有真的变了才重启轮询。
+      // 原来是无条件 stopPoller()+startPoller()，导致发一句 `gh 帮助`、
+      // 甚至 `gh 列表` 都会重建轮询链——既浪费也可能和正在跑的那轮撞车。
+      const before = subscriptionFingerprint();
+      const handled = await handleCommand(event, cmd, ctx);
+      if (handled && subscriptionFingerprint() !== before) {
+        syncPoller();
+      }
+      return;
+    }
+
+    // 自动识别 GitHub 仓库链接
+    if (!pluginState.config.autoDetectRepo) return;
+    const repoMatch = raw.match(/https?:\/\/github\.com\/([a-zA-Z0-9\-_.]+\/[a-zA-Z0-9\-_.]+)/);
+    if (!repoMatch) return;
+
+    // 统一走 normalizeRepo：正则允许 `..`，`https://github.com/../foo` 会
+    // 得到 repoName='../foo'，拼出 `https://api.github.com/repos/../foo`。
+    const repoName = normalizeRepo(repoMatch[1].replace(/\.git$/, ''));
+    if (!repoName) return;
+
+    // 限流：每群/每人 30 秒一次、全局每分钟 20 次。
+    // 原来没有任何限制，任何人（含陌生人私聊）发一条带 github.com 链接的消息
+    // 就触发 2 次 GitHub API + 1 次 puppeteer 渲染 + 1 次图片上传，
+    // 几十条消息就能打光 5000/h 配额，或把 puppeteer 打满导致正常推送也渲染失败。
+    const throttleKey = event.message_type === 'group'
+      ? `g:${event.group_id}`
+      : `u:${event.user_id}`;
+    if (!checkAutoDetectRate(throttleKey)) {
+      pluginState.debug(`[自动识别] 触发限流，跳过: ${throttleKey}`);
+      return;
+    }
+
+    pluginState.debug(`[自动识别] 检测到 GitHub 仓库链接: ${repoName}`);
+
     const repoInfo = await fetchRepoInfo(repoName);
     if (!repoInfo) {
       pluginState.debug(`[自动识别] 获取仓库信息失败: ${repoName}`);
@@ -166,14 +278,16 @@ const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPlu
       : [{ type: 'text', data: { text: fallback } }];
 
     if (event.message_type === 'group' && event.group_id) {
-      await ctx.actions.call('send_group_msg', { group_id: event.group_id, message: msg } as never, ctx.adapterName, ctx.pluginManager.config).catch(() => { });
+      await ctx.actions.call('send_group_msg', { group_id: event.group_id, message: msg } as never, ctx.adapterName, ctx.pluginManager.config)
+        .catch(e => pluginState.log('warn', `[自动识别] 发送仓库卡片到群 ${event.group_id} 失败: ${e}`));
     } else {
-      await ctx.actions.call('send_private_msg', { user_id: event.user_id, message: msg } as never, ctx.adapterName, ctx.pluginManager.config).catch(() => { });
+      await ctx.actions.call('send_private_msg', { user_id: event.user_id, message: msg } as never, ctx.adapterName, ctx.pluginManager.config)
+        .catch(e => pluginState.log('warn', `[自动识别] 发送仓库卡片给用户 ${event.user_id} 失败: ${e}`));
     }
 
     pluginState.debug(`[自动识别] 仓库卡片已发送: ${repoName}`);
   } catch (e) {
-    pluginState.log('error', `[自动识别] 处理仓库链接失败: ${repoName}, ${e}`);
+    pluginState.log('error', `[onmessage] 处理消息失败: ${e}`);
   }
 };
 

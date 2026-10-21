@@ -765,6 +765,11 @@
       <div style="margin-bottom:12px"><label style="font-size:12px;color:var(--text2)">分支</label><input type="text"
           id="edit-branch" class="ipt" placeholder="main"></div>
       <div style="margin-bottom:12px">
+        <label style="font-size:12px;color:var(--text2)">订阅别名（可选）</label>
+        <input type="text" id="edit-alias" class="ipt" placeholder="如「文明」；留空则显示仓库名">
+        <p style="font-size:11px;color:var(--text3);margin-top:4px">用于 AI 更新摘要的标题，清空即取消别名</p>
+      </div>
+      <div style="margin-bottom:12px">
         <label style="font-size:12px;color:var(--text2)">监控类型</label>
         <div style="display:flex;gap:12px;margin-top:4px">
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="edit-commits"
@@ -1079,6 +1084,68 @@
                   </div>
                 </div>
               </div>
+              <div style="margin-top:12px">
+                <label style="font-size:12px;color:var(--text2)">Commits 数据源</label>
+                <select id="cfg-commitSource" class="ipt">
+                  <option value="commits">/commits（推荐，实时且有序）</option>
+                  <option value="events">/events（旧行为，数据滞后）</option>
+                </select>
+                <p style="font-size:11px;color:var(--text3);margin-top:4px">
+                  GitHub 的 /events 接口是聚合管道，实测可能滞后数小时且时间戳乱序；
+                  /commits 直接读 Git 记录，几乎实时。只有在特殊情况下才需要切回 /events。
+                </p>
+              </div>
+            </div>
+            <div class="cfg-sec">
+              <div class="sec-t">AI 更新摘要</div>
+              <div class="cfg-row" style="padding:4px 0;margin-bottom:10px">
+                <span style="font-size:14px">启用 AI 摘要</span>
+                <div class="tgl" id="cfg-llm-enabled" onclick="tg(this)"></div>
+              </div>
+              <p style="font-size:11px;color:var(--text3);margin-bottom:12px">
+                开启后，检测到新提交时会在图片推送之外，额外发一条由大模型生成的中文更新摘要。
+                摘要跑在后台，不会拖慢推送。需要 OpenAI 兼容的接口。
+              </p>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+                <div>
+                  <label style="font-size:12px;color:var(--text2)">API 地址</label>
+                  <input type="text" id="cfg-llm-apiBase" class="ipt" placeholder="https://api.openai.com/v1">
+                </div>
+                <div>
+                  <label style="font-size:12px;color:var(--text2)">模型</label>
+                  <input type="text" id="cfg-llm-model" class="ipt" placeholder="gpt-4o-mini">
+                </div>
+              </div>
+              <div style="margin-bottom:12px">
+                <label style="font-size:12px;color:var(--text2)">API Key</label>
+                <div style="display:flex;gap:8px">
+                  <input type="text" id="cfg-llm-apiKey" class="ipt" placeholder="sk-..." style="flex:1">
+                  <button class="btn btn-s" id="llm-test-btn" onclick="testLLM()">测试</button>
+                </div>
+                <p style="font-size:11px;color:var(--text3);margin-top:4px">
+                  已配置时显示为 ***，不改动就保持原值
+                </p>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+                <div>
+                  <label style="font-size:12px;color:var(--text2)">超时（秒）</label>
+                  <input type="number" id="cfg-llm-timeout" class="ipt" min="3" max="120" placeholder="15">
+                </div>
+                <div>
+                  <label style="font-size:12px;color:var(--text2)">最大 Token</label>
+                  <input type="number" id="cfg-llm-maxTokens" class="ipt" min="50" max="8000" placeholder="400">
+                </div>
+                <div>
+                  <label style="font-size:12px;color:var(--text2)">Diff 上限（字符）</label>
+                  <input type="number" id="cfg-llm-maxDiffChars" class="ipt" min="500" max="200000" placeholder="6000">
+                </div>
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--text2)">自定义提示词（留空用内置）</label>
+                <textarea id="cfg-llm-prompt" class="ipt" rows="3"
+                  placeholder="留空使用内置提示词：分析代码变更并输出 80-150 字中文摘要..."
+                  style="resize:vertical;font-family:inherit"></textarea>
+              </div>
             </div>
             <div class="cfg-sec">
               <div class="sec-t">渲染主题</div>
@@ -1192,12 +1259,24 @@
               <div style="margin-bottom:12px">
                 <label style="font-size:12px;color:var(--text2)">仓库地址</label>
                 <div style="display:flex;gap:8px">
-                  <input type="text" id="add-repo" class="ipt" placeholder="owner/repo，如 torvalds/linux" style="flex:1">
+                  <input type="text" id="add-repo" class="ipt"
+                    placeholder="owner/repo，或直接粘贴 https://github.com/owner/repo" style="flex:1">
                   <button class="btn btn-s" id="fetch-branches-btn" onclick="fetchBranchList()">获取分支</button>
                 </div>
+                <p style="font-size:11px;color:var(--text3);margin-top:4px">
+                  支持直接粘贴仓库链接，会自动提取 owner/repo
+                </p>
               </div>
               <div style="margin-bottom:12px">
-                <label style="font-size:12px;color:var(--text2)">选择分支（输入仓库地址后点击「获取分支」，或手动输入）</label>
+                <label style="font-size:12px;color:var(--text2)">订阅别名（可选）</label>
+                <input type="text" id="add-alias" class="ipt"
+                  placeholder="如「文明」；留空则显示仓库名，用于 AI 更新摘要的标题">
+                <p style="font-size:11px;color:var(--text3);margin-top:4px">
+                  多个仓库时建议填写，摘要标题会变成「本次更新摘要（别名 · owner/repo）」
+                </p>
+              </div>
+              <div style="margin-bottom:12px">
+                <label style="font-size:12px;color:var(--text2)">选择分支（可多选）</label>
                 <div id="branch-picker-area">
                   <input type="text" id="add-branch" class="ipt" placeholder="手动输入分支名，留空则自动获取默认分支">
                 </div>
@@ -1347,6 +1426,7 @@
                 <button class="lfb active" id="tpl-tab-commits" onclick="switchTpl('commits')">Commits</button>
                 <button class="lfb" id="tpl-tab-issues" onclick="switchTpl('issues')">Issues</button>
                 <button class="lfb" id="tpl-tab-pulls" onclick="switchTpl('pulls')">Pull Requests</button>
+                <button class="lfb" id="tpl-tab-comments" onclick="switchTpl('comments')">Comments</button>
               </div>
             </div>
             <div style="margin-bottom:12px">
@@ -1397,6 +1477,15 @@
 
     function $ (id) { return document.getElementById(id); }
     function esc (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+    // 内联 onclick 里的参数不能用 esc()：esc 把 ' 转成 &#39;，HTML 属性解析时
+    // 又还原成 '，于是 `onclick="f('${esc(x)}')"` 里的 x 含单引号就能跳出字符串
+    // 执行任意 JS。这里用 JSON.stringify 生成带双引号的字面量，再把 " & < >
+    // 转成 HTML 实体——属性解析后正好还原成合法的 JS 字符串字面量。
+    function jsq (v) {
+      return JSON.stringify(String(v ?? ''))
+        .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
     function tg (el) { el.classList.toggle('on'); }
     function stg (id, v) { const e = $(id); if (e) { if (v) e.classList.add('on'); else e.classList.remove('on'); } }
     function gtg (id) { return $(id)?.classList.contains('on') || false; }
@@ -1404,13 +1493,32 @@
     function toast (m, t = 'info') {
       const c = $('tc'), icons = { success: I.check, error: I.cross, info: I.info };
       const d = document.createElement('div'); d.className = 'toast';
-      d.innerHTML = `<span>${icons[t] || ''}</span><span>${m}</span>`;
+      // m 里经常拼后端返回的错误串，而后端错误串含用户输入
+      //（如「无法识别仓库名：<script>...」），不转义就是 DOM XSS
+      d.innerHTML = `<span>${icons[t] || ''}</span><span>${esc(m)}</span>`;
       c.appendChild(d); setTimeout(() => { d.style.opacity = '0'; setTimeout(() => d.remove(), 300); }, 3000);
     }
 
     async function api (path, body) {
       const opt = body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {};
-      return (await fetch(API + path, opt)).json();
+      let res;
+      try {
+        res = await fetch(API + path, opt);
+      } catch (e) {
+        // 网络层失败（面板端口被占、NapCat 重启中、断网）必须给出明确错误，
+        // 否则调用方的 await 直接抛异常，界面上什么反应都没有
+        throw new Error('无法连接后端: ' + (e && e.message ? e.message : e));
+      }
+      const text = await res.text();
+      if (!res.ok) {
+        // 后端异常时返回的可能是 HTML 错误页，直接 .json() 会抛 SyntaxError
+        throw new Error(`HTTP ${res.status}: ${text.slice(0, 120)}`);
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error('后端返回的不是 JSON: ' + text.slice(0, 120));
+      }
     }
 
     function go (pg, el) {
@@ -1435,6 +1543,17 @@
     }
 
     // ===== 群选择器组件 =====
+    // 全局只有一个 document 级点击监听，负责关闭所有下拉框。
+    // 原来每个 picker 各自 document.addEventListener('click', ...) 且从不移除，
+    // 而 editSub / editUser 每次打开编辑框都新建一个 picker，
+    // 用久了就累积出成百上千个监听器（每次点击全跑一遍）。
+    const openDropdowns = new Set();
+    document.addEventListener('click', e => {
+      openDropdowns.forEach(entry => {
+        if (!entry.wrapper.contains(e.target)) entry.dropdown.classList.remove('show');
+      });
+    });
+
     function createGroupPicker (containerId, initialGroups) {
       const container = $(containerId);
       const selected = new Set((initialGroups || []).map(String));
@@ -1445,6 +1564,9 @@
       const dropdown = document.createElement('div'); dropdown.className = 'grp-dropdown scr';
       wrapper.appendChild(chipArea); wrapper.appendChild(searchInput); wrapper.appendChild(dropdown);
       container.innerHTML = ''; container.appendChild(wrapper);
+      // 编辑框每次打开都会重建 picker，旧 wrapper 已经不在文档里了，顺手清掉
+      openDropdowns.forEach(entry => { if (!entry.wrapper.isConnected) openDropdowns.delete(entry); });
+      openDropdowns.add({ wrapper, dropdown });
 
       function renderChips () {
         chipArea.innerHTML = '';
@@ -1479,7 +1601,6 @@
         const opt = e.target.closest('.grp-opt');
         if (opt) { selected.add(String(opt.dataset.gid)); renderChips(); renderDropdown(searchInput.value); }
       });
-      document.addEventListener('click', e => { if (!wrapper.contains(e.target)) dropdown.classList.remove('show'); });
 
       renderChips();
       return { getSelected: () => Array.from(selected), setSelected: (arr) => { selected.clear(); (arr || []).forEach(g => selected.add(String(g))); renderChips(); } };
@@ -1575,18 +1696,31 @@
       renderTokens();
       $('cfg-api').value = CFG.apiBase || 'https://api.github.com';
       $('cfg-webuiPort').value = CFG.webuiPort || '';
-      // 首次进入自动提取端口并写入配置
-      if (!CFG.webuiPort) {
-        const port = Number(location.port) || 6099;
-        $('cfg-webuiPort').value = port;
-        api('/config', { webuiPort: port }).then(() => {
-          CFG.webuiPort = port;
-          toast('已自动提取 WebUI 端口: ' + port, 'ok');
+      // 首次进入自动提取端口并写入配置。
+      // 只在页面确实带端口时才写：location.port 为空说明是 80/443，
+      // 原来回落成 6099 会把一个错的端口写进配置，渲染探测永远失败。
+      const locPort = Number(location.port);
+      if (!CFG.webuiPort && locPort > 0 && locPort <= 65535) {
+        $('cfg-webuiPort').value = locPort;
+        api('/config', { webuiPort: locPort }).then(() => {
+          CFG.webuiPort = locPort;
+          toast('已自动提取 WebUI 端口: ' + locPort, 'success');
           checkPptr();
-        });
+        }).catch(e => toast('自动写入端口失败: ' + e.message, 'error'));
       }
-      $('cfg-interval').value = String(CFG.interval || 30);
+      $('cfg-interval').value = String(CFG.interval || 60);
+      $('cfg-commitSource').value = CFG.commitSource || 'commits';
       stg('cfg-debug', CFG.debug);
+      // AI 摘要
+      const L = CFG.llm || {};
+      stg('cfg-llm-enabled', L.enabled);
+      $('cfg-llm-apiBase').value = L.apiBase || '';
+      $('cfg-llm-model').value = L.model || '';
+      $('cfg-llm-apiKey').value = L.apiKey || '';   // 后端回传 *** 或空
+      $('cfg-llm-timeout').value = L.timeout ? String(Math.round(L.timeout / 1000)) : '';
+      $('cfg-llm-maxTokens').value = L.maxTokens || '';
+      $('cfg-llm-maxDiffChars').value = L.maxDiffChars || '';
+      $('cfg-llm-prompt').value = L.prompt || '';
       // 主题
       $('cfg-theme').value = CFG.theme || 'light';
       onThemeChange();
@@ -1605,7 +1739,9 @@
       $('d-users').textContent = USUBS.length;
       const allG = new Set(); SUBS.forEach(s => (s.groups || []).forEach(g => allG.add(g))); USUBS.forEach(u => (u.groups || []).forEach(g => allG.add(g)));
       $('d-groups').textContent = allG.size;
-      $('d-interval').textContent = (CFG.interval || 30) + 's';
+      // 默认值与后端 DEFAULT_CONFIG.interval 对齐（都是 60），
+      // 原来写 30，未配置时面板显示 30s 而实际跑 60s
+      $('d-interval').textContent = (CFG.interval || 60) + 's';
       badge('d-token', CFG.tokenCount > 0, CFG.tokenCount + ' 个 Token', '未配置');
       badge('d-debug', CFG.debug, '已开启', '已关闭');
       // 检测 Puppeteer
@@ -1620,16 +1756,18 @@
         <span style="font-size:14px;font-weight:500">${esc(s.repo)}</span>
         <span style="font-size:11px;color:var(--text3)">(${esc(s.branch || 'main')})</span>
       </div>
-      <div>${(s.types || []).map(t => '<span class="type-badge type-' + t + '">' + t + '</span>').join('')}</div>
+      <div>${(s.types || []).map(t => '<span class="type-badge type-' + esc(t) + '">' + esc(t) + '</span>').join('')}</div>
     </div>`;
       }).join('');
     }
 
     // ===== 自动提取端口 =====
     function autoDetectPort () {
-      const port = Number(location.port) || 6099;
+      // 没有 location.port 说明面板挂在 80/443 上，这时不能瞎填 6099
+      const port = Number(location.port);
+      if (!port) { toast('当前页面未使用非标准端口，请手动填写 WebUI 端口', 'error'); return; }
       $('cfg-webuiPort').value = port;
-      toast('已提取当前端口: ' + port + '，请点击保存生效', 'ok');
+      toast('已提取当前端口: ' + port + '，请点击保存生效', 'success');
     }
 
     // ===== Puppeteer 状态 =====
@@ -1658,17 +1796,17 @@
         <div style="display:flex;align-items:center;gap:8px">
           <span style="font-size:16px">${s.enabled ? I.check : I.cross}</span>
           <div>
-            <div style="font-size:14px;font-weight:500">${esc(s.repo)} <span style="font-size:11px;color:var(--text3);font-weight:400">(${esc(s.branch || 'main')})</span></div>
+            <div style="font-size:14px;font-weight:500">${s.alias ? `<span style="color:var(--accent)">${esc(s.alias)}</span> <span style="font-size:11px;color:var(--text3);font-weight:400">·</span> ` : ''}${esc(s.repo)} <span style="font-size:11px;color:var(--text3);font-weight:400">(${esc(s.branch || 'main')})</span></div>
             <div style="margin-top:4px">
-              ${(s.types || []).map(t => '<span class="type-badge type-' + t + '">' + t + '</span>').join('')}
+              ${(s.types || []).map(t => '<span class="type-badge type-' + esc(t) + '">' + esc(t) + '</span>').join('')}
               <span style="font-size:11px;color:var(--text3);margin-left:4px">→ ${grpNames.length ? esc(grpNames.join(', ')) : '<em>无推送群</em>'}</span>
             </div>
           </div>
         </div>
         <div style="display:flex;gap:4px">
-          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="editSub('${esc(s.repo)}','${esc(s.branch || 'main')}')">编辑</button>
-          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="toggleSub('${esc(s.repo)}','${esc(s.branch || 'main')}')">${s.enabled ? '关闭' : '开启'}</button>
-          <button class="btn btn-d" style="font-size:11px;padding:4px 10px" onclick="deleteSub('${esc(s.repo)}','${esc(s.branch || 'main')}')">删除</button>
+          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="editSub(${jsq(s.repo)},${jsq(s.branch || 'main')})">编辑</button>
+          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="toggleSub(${jsq(s.repo)},${jsq(s.branch || 'main')})">${s.enabled ? '关闭' : '开启'}</button>
+          <button class="btn btn-d" style="font-size:11px;padding:4px 10px" onclick="deleteSub(${jsq(s.repo)},${jsq(s.branch || 'main')})">删除</button>
         </div>
       </div>
     </div>`;
@@ -1683,6 +1821,7 @@
         apiBase: $('cfg-api').value,
         webuiPort: Number($('cfg-webuiPort').value) || 0,
         interval: Number($('cfg-interval').value),
+        commitSource: $('cfg-commitSource').value,
         debug: gtg('cfg-debug'),
         owners: ownerList,
         allowMemberSub: gtg('cfg-allowMemberSub'),
@@ -1691,7 +1830,11 @@
         theme,
       };
       if (tokensModified) {
-        payload.tokens = tokenList.filter(t => t !== '***');
+        // 必须把 *** 占位符一起发回去，让后端按位置合并。
+        // 原来 filter 掉 *** 只发新值，后端拿到的是 ['新token']，
+        // 按位置合并时第一个位置就被新 token 顶掉 —— 用户以为「加了一个」，
+        // 实际是「替换了第一个」，旧的 PAT 直接丢失。
+        payload.tokens = tokenList.slice();
         tokensModified = false;
       }
       if (theme === 'custom') {
@@ -1700,9 +1843,50 @@
         keys.forEach(k => { ct[k] = $('ct-' + k + '-t').value || $('ct-' + k).value; });
         payload.customTheme = ct;
       }
-      const d = await api('/config', payload);
-      if (d.success) { toast('配置已保存', 'success'); await loadAll(); }
-      else toast('保存失败: ' + (d.error || ''), 'error');
+      // AI 摘要配置：apiKey 为空则不发送，保持原值；为 *** 也表示保持原值
+      const llmKey = $('cfg-llm-apiKey').value.trim();
+      payload.llm = {
+        enabled: gtg('cfg-llm-enabled'),
+        apiBase: $('cfg-llm-apiBase').value.trim(),
+        model: $('cfg-llm-model').value.trim(),
+        timeout: Math.round((Number($('cfg-llm-timeout').value) || 15) * 1000),
+        maxTokens: Number($('cfg-llm-maxTokens').value) || 400,
+        maxDiffChars: Number($('cfg-llm-maxDiffChars').value) || 6000,
+        prompt: $('cfg-llm-prompt').value,
+      };
+      if (llmKey) payload.llm.apiKey = llmKey;
+      try {
+        const d = await api('/config', payload);
+        if (d.success) { toast('配置已保存', 'success'); await loadAll(); }
+        else toast('保存失败: ' + (d.error || ''), 'error');
+      } catch (e) {
+        // api() 现在会抛错（网络失败 / 非 2xx / 非 JSON），不接住就静默失败
+        toast('保存失败: ' + e.message, 'error');
+      }
+    }
+
+    // ===== AI 摘要连通性测试 =====
+    async function testLLM () {
+      const btn = $('llm-test-btn');
+      btn.textContent = '测试中...';
+      btn.disabled = true;
+      try {
+        const d = await api('/llm/test', {
+          apiBase: $('cfg-llm-apiBase').value.trim(),
+          model: $('cfg-llm-model').value.trim(),
+          apiKey: $('cfg-llm-apiKey').value.trim(),
+        });
+        if (d.success) {
+          toast(`连接正常（${d.ms}ms）模型回复: ${d.reply || '(空)'}`, 'success');
+        } else {
+          toast('连接失败: ' + (d.error || '未知错误'), 'error');
+        }
+      } catch (e) {
+        toast('测试失败: ' + e, 'error');
+      } finally {
+        btn.textContent = '测试';
+        btn.disabled = false;
+      }
     }
 
     // ===== 分支选择 =====
@@ -1710,9 +1894,16 @@
     let selectedBranches = new Set();
 
     async function fetchBranchList () {
-      const repo = $('add-repo').value.trim().toLowerCase();
-      if (!repo) { toast('请先输入仓库地址', 'error'); return; }
-      if (!repo.includes('/')) { toast('格式错误，请使用 owner/repo', 'error'); return; }
+      const rawInput = $('add-repo').value.trim();
+      if (!rawInput) { toast('请先输入仓库地址', 'error'); return; }
+      // 与后端 normalizeRepo 保持一致的宽松解析，前端先做一遍便于即时提示
+      const repo = normalizeRepoInput(rawInput);
+      if (!repo) {
+        toast('无法识别仓库名，请填 owner/repo 或粘贴 github.com 仓库链接', 'error');
+        return;
+      }
+      // 解析成功时把输入框回填成规范形式，方便用户确认
+      if (rawInput !== repo) $('add-repo').value = repo;
       const btn = $('fetch-branches-btn');
       btn.textContent = '加载中...';
       btn.disabled = true;
@@ -1728,7 +1919,7 @@
           $('branch-list-wrap').style.display = 'block';
           $('add-branch').style.display = 'none';
           $('branch-hint').style.display = 'block';
-          $('branch-hint').textContent = `共 ${fetchedBranches.length} 个分支，可多选`;
+          $('branch-hint').textContent = `共 ${fetchedBranches.length} 个分支，可多选（已默认勾选 ${def ? def.name : '首个分支'}）`;
           toast(`获取到 ${fetchedBranches.length} 个分支`, 'success');
         } else {
           toast('获取分支失败: ' + (d.error || '无分支'), 'error');
@@ -1744,12 +1935,31 @@
       }
     }
 
+    // 前端版仓库名规范化，逻辑与后端 normalizeRepo 一致（含统一小写）
+    function normalizeRepoInput (input) {
+      if (!input) return null;
+      let s = String(input).trim();
+      s = s.replace(/^[<'"`]+|[>'"`]+$/g, '').trim();
+      s = s.replace(/^git@github\.com:/i, '');
+      s = s.replace(/^(?:https?|ssh|git):\/\//i, '');
+      s = s.replace(/^[^/@]+@/i, '');
+      s = s.replace(/^(?:www\.)?github\.com[/:]/i, '');
+      s = s.split(/[?#]/)[0];
+      const parts = s.split('/').filter(p => p !== '');
+      if (parts.length < 2) return null;
+      const owner = parts[0];
+      const repo = parts[1].replace(/\.git$/i, '');
+      const ok = /^[A-Za-z0-9._-]+$/;
+      if (!ok.test(owner) || !ok.test(repo)) return null;
+      return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+    }
+
     function renderBranchPicker () {
       const wrap = $('branch-list-wrap');
       wrap.innerHTML = fetchedBranches.map(b => {
         const checked = selectedBranches.has(b.name) ? 'checked' : '';
         const defBadge = b.isDefault ? ' <span class="branch-default">默认</span>' : '';
-        return `<label class="branch-item"><input type="checkbox" class="chk" ${checked} onchange="toggleBranch('${esc(b.name)}', this.checked)"> ${esc(b.name)}${defBadge}</label>`;
+        return `<label class="branch-item"><input type="checkbox" class="chk" ${checked} onchange="toggleBranch(${jsq(b.name)}, this.checked)"> ${esc(b.name)}${defBadge}</label>`;
       }).join('');
     }
 
@@ -1760,9 +1970,12 @@
 
     // ===== 添加订阅 =====
     async function addSub () {
-      const repo = $('add-repo').value.trim().toLowerCase();
-      if (!repo) { toast('请输入仓库地址', 'error'); return; }
-      if (!repo.includes('/')) { toast('格式错误，请使用 owner/repo', 'error'); return; }
+      const rawInput = $('add-repo').value.trim();
+      if (!rawInput) { toast('请输入仓库地址', 'error'); return; }
+      const repo = normalizeRepoInput(rawInput);
+      if (!repo) { toast('无法识别仓库名，请填 owner/repo 或粘贴 github.com 仓库链接', 'error'); return; }
+      $('add-repo').value = repo;
+
       const types = [];
       if ($('add-commits').checked) types.push('commits');
       if ($('add-issues').checked) types.push('issues');
@@ -1771,6 +1984,8 @@
       if (!types.length) { toast('请至少选择一种监控类型', 'error'); return; }
       const groups = addPicker ? addPicker.getSelected() : [];
       const body = { repo, types, groups };
+      const alias = $('add-alias').value.trim();
+      if (alias) body.alias = alias;
       // 如果用了分支选择器且有选中的分支
       if (fetchedBranches.length && selectedBranches.size) {
         body.branches = Array.from(selectedBranches);
@@ -1779,11 +1994,12 @@
         const branch = $('add-branch').value.trim();
         if (branch) body.branch = branch;
       }
-      const d = await api('/sub/add', body);
+      const d = await api('/sub/add', body).catch(e => ({ success: false, error: e.message }));
       if (d.success) {
         const msg = d.message || '订阅添加成功';
         toast(msg, 'success');
         $('add-repo').value = '';
+        $('add-alias').value = '';
         $('add-branch').value = '';
         $('add-branch').style.display = '';
         $('branch-list-wrap').style.display = 'none';
@@ -1799,9 +2015,9 @@
 
     // ===== 切换/删除 =====
     async function toggleSub (repo, branch) {
-      const d = await api('/sub/toggle', { repo, branch });
+      const d = await api('/sub/toggle', { repo, branch }).catch(e => ({ success: false, error: e.message }));
       if (d.success) { toast(d.enabled ? '已开启' : '已关闭', 'success'); await loadAll(); }
-      else toast('操作失败', 'error');
+      else toast('操作失败: ' + (d.error || ''), 'error');
     }
     // ===== 自定义确认弹窗 =====
     let _confirmCb = null;
@@ -1820,16 +2036,21 @@
     async function deleteSub (repo, branch) {
       const ok = await customConfirm('确定删除订阅 ' + repo + ' (' + branch + ') ？');
       if (!ok) return;
-      const d = await api('/sub/delete', { repo, branch });
+      const d = await api('/sub/delete', { repo, branch }).catch(e => ({ success: false, error: e.message }));
       if (d.success) { toast('已删除', 'success'); await loadAll(); }
-      else toast('删除失败', 'error');
+      else toast('删除失败: ' + (d.error || ''), 'error');
     }
 
     // ===== 编辑订阅 =====
     function editSub (repo, branch) {
-      const sub = SUBS.find(s => s.repo === repo && s.branch === branch); if (!sub) return;
+      // 与后端一致做大小写不敏感匹配：历史配置里 repo 可能含大写，
+      // 后端已经 normalizeRepo 成小写，前端用精确 === 会找不到 → 点「编辑」没反应
+      const lowRepo = String(repo).toLowerCase();
+      const sub = SUBS.find(s => String(s.repo).toLowerCase() === lowRepo && (s.branch || 'main') === (branch || 'main'));
+      if (!sub) { toast('未找到该订阅，请刷新后重试', 'error'); return; }
       $('edit-repo').value = sub.repo;
       $('edit-branch').value = sub.branch || 'main';
+      $('edit-alias').value = sub.alias || '';
       $('edit-commits').checked = (sub.types || []).includes('commits');
       $('edit-issues').checked = (sub.types || []).includes('issues');
       $('edit-pulls').checked = (sub.types || []).includes('pulls');
@@ -1849,7 +2070,9 @@
       if ($('edit-actions').checked) types.push('actions');
       const groups = editPicker ? editPicker.getSelected() : [];
       const branch = $('edit-branch').value.trim() || 'main';
-      const d = await api('/sub/update', { repo, oldBranch, types, groups, branch });
+      // 别名始终发送：空串表示清除，后端据此删除该字段
+      const alias = $('edit-alias').value.trim();
+      const d = await api('/sub/update', { repo, oldBranch, types, groups, branch, alias }).catch(e => ({ success: false, error: e.message }));
       if (d.success) { toast('订阅已更新', 'success'); closeEdit(); await loadAll(); }
       else toast('更新失败: ' + (d.error || ''), 'error');
     }
@@ -1892,15 +2115,18 @@
     function rndLogs () { const c = $('logC'), f = logFlt === 'all' ? logD : logD.filter(l => l.level === logFlt); $('logCnt').textContent = `${f.length}/${logD.length} 条`; if (!f.length) { c.innerHTML = '<p style="color:#64748b">暂无日志</p>'; return; } c.innerHTML = f.map(l => { const t = new Date(l.time), ts = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')}.${String(t.getMilliseconds()).padStart(3, '0')}`, lv = l.level.toUpperCase().padEnd(5); return `<div class="log-e log-${l.level}"><span class="lt">${ts}</span> <span class="ll">[${lv}]</span> <span class="lm">${esc(l.msg)}</span></div>`; }).join(''); if ($('logAS')?.checked) c.scrollTop = c.scrollHeight; }
     function fltLog (lv, btn) { logFlt = lv; btn.parentElement.querySelectorAll('.lfb').forEach(b => b.classList.remove('active')); btn?.classList.add('active'); rndLogs(); }
     async function clrLogs () { try { await api('/logs/clear', {}); logD = []; rndLogs(); toast('日志已清除', 'success'); } catch { toast('清除失败', 'error'); } }
-    function tglDbg () { const on = gtg('l-db'); api('/config', { debug: on }).then(() => { CFG.debug = on; toast(on ? '调试模式已开启' : '调试模式已关闭', 'info'); }).catch(() => { }); }
+    function tglDbg () { const on = gtg('l-db'); api('/config', { debug: on }).then(() => { CFG.debug = on; toast(on ? '调试模式已开启' : '调试模式已关闭', 'info'); }).catch(e => toast('切换调试模式失败: ' + e.message, 'error')); }
     function startLR () { if (logTmr) return; logTmr = setInterval(loadLogs, 3000); }
     function stopLR () { if (logTmr) { clearInterval(logTmr); logTmr = null; } }
 
     // ===== 自定义模板 =====
     let curTpl = 'commits';
+    // 后端 customHTML 支持四个键（含 comments），前端 tab 也要齐，
+    // 否则用户在面板里既看不到也清不掉 comments 模板
+    const TPL_TYPES = ['commits', 'issues', 'pulls', 'comments'];
     function switchTpl (type) {
       curTpl = type;
-      ['commits', 'issues', 'pulls'].forEach(t => {
+      TPL_TYPES.forEach(t => {
         const btn = $('tpl-tab-' + t);
         if (btn) { if (t === type) btn.classList.add('active'); else btn.classList.remove('active'); }
       });
@@ -1910,11 +2136,17 @@
     }
     async function saveTpl () {
       const val = $('tpl-editor').value.trim();
-      const ch = CFG.customHTML || {};
+      // 拷贝一份再改：原来 ch 直接引用 CFG.customHTML，
+      // 后端保存失败时本地 CFG 已经被改脏，之后切 tab 显示的是没保存的内容
+      const ch = { ...(CFG.customHTML || {}) };
       if (val) ch[curTpl] = val; else delete ch[curTpl];
-      const d = await api('/config', { customHTML: Object.keys(ch).length ? ch : {} });
-      if (d.success) { CFG.customHTML = ch; toast(val ? '模板已保存' : '已恢复内置模板', 'success'); }
-      else toast('保存失败', 'error');
+      try {
+        const d = await api('/config', { customHTML: Object.keys(ch).length ? ch : {} });
+        if (d.success) { CFG.customHTML = ch; toast(val ? '模板已保存' : '已恢复内置模板', 'success'); }
+        else toast('保存失败: ' + (d.error || ''), 'error');
+      } catch (e) {
+        toast('保存失败: ' + e.message, 'error');
+      }
     }
     function clearTpl () {
       $('tpl-editor').value = '';
@@ -1926,17 +2158,26 @@
       // 用示例数据替换变量
       const sampleItems = curTpl === 'commits'
         ? JSON.stringify([{ sha: 'abc1234567890', sha7: 'abc1234', message: '示例提交消息', author: 'test-user', date: new Date().toISOString(), url: '#', files: [{ filename: 'src/index.ts', status: 'modified', additions: 10, deletions: 3, patch: '@@ -1,3 +1,10 @@\n+added line\n-removed line' }] }])
-        : JSON.stringify([{ number: 1, title: '示例 Issue/PR 标题', state: 'open', action: 'opened', author: 'test-user', created_at: new Date().toISOString(), url: '#', labels: [{ name: 'bug', color: 'd73a4a' }] }]);
+        : curTpl === 'comments'
+          ? JSON.stringify([{ number: 1, title: '示例 Issue/PR 标题', body: '示例评论内容', source: 'issue', action: 'created', author: 'test-user', created_at: new Date().toISOString(), url: '#' }])
+          : JSON.stringify([{ number: 1, title: '示例 Issue/PR 标题', state: 'open', action: 'opened', author: 'test-user', created_at: new Date().toISOString(), url: '#', labels: [{ name: 'bug', color: 'd73a4a' }] }]);
+      const typeLabel = { commits: 'Commits', issues: 'Issues', pulls: 'Pull Requests', comments: 'Comments' }[curTpl] || 'Updates';
       let rendered = html
         .replace(/\{\{repo\}\}/g, 'owner/example-repo')
         .replace(/\{\{count\}\}/g, '1')
-        .replace(/\{\{type\}\}/g, curTpl === 'commits' ? 'Commits' : curTpl === 'issues' ? 'Issues' : 'Pull Requests')
+        .replace(/\{\{type\}\}/g, typeLabel)
         .replace(/\{\{time\}\}/g, new Date().toLocaleString('zh-CN'))
         .replace(/\{\{items\}\}/g, sampleItems);
       const frame = $('tpl-preview-frame');
       frame.innerHTML = '';
       const iframe = document.createElement('iframe');
       iframe.style.cssText = 'width:100%;border:none;min-height:300px';
+      // 沙箱化：预览的是用户自己写的 HTML，但万一模板是从别处复制来的，
+      // 同源 iframe 里执行 <script> 就能直接操作面板（读到已保存的 token 掩码、
+      // 甚至发请求改配置）。
+      // 只给 allow-same-origin（允许我们 write 进去、读 scrollHeight），
+      // 不给 allow-scripts —— 脚本仍然被禁用。两个都给就等于没沙箱。
+      iframe.setAttribute('sandbox', 'allow-same-origin');
       frame.appendChild(iframe);
       iframe.contentDocument.open();
       iframe.contentDocument.write(rendered);
@@ -1967,9 +2208,9 @@
           </div>
         </div>
         <div style="display:flex;gap:4px">
-          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="editUser('${esc(u.username)}')">编辑</button>
-          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="toggleUser('${esc(u.username)}')">${u.enabled ? '关闭' : '开启'}</button>
-          <button class="btn btn-d" style="font-size:11px;padding:4px 10px" onclick="deleteUser('${esc(u.username)}')">删除</button>
+          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="editUser(${jsq(u.username)})">编辑</button>
+          <button class="btn btn-s" style="font-size:11px;padding:4px 10px" onclick="toggleUser(${jsq(u.username)})">${u.enabled ? '关闭' : '开启'}</button>
+          <button class="btn btn-d" style="font-size:11px;padding:4px 10px" onclick="deleteUser(${jsq(u.username)})">删除</button>
         </div>
       </div>
     </div>`;
@@ -1981,7 +2222,7 @@
       if (!username) { toast('请输入 GitHub 用户名', 'error'); return; }
       if (USUBS.some(u => u.username.toLowerCase() === username.toLowerCase())) { toast('该用户已在监控列表', 'error'); return; }
       const groups = addUserPicker ? addUserPicker.getSelected() : [];
-      const d = await api('/user/add', { username, groups });
+      const d = await api('/user/add', { username, groups }).catch(e => ({ success: false, error: e.message }));
       if (d.success) {
         toast('用户监控添加成功', 'success');
         $('add-user-name').value = '';
@@ -1991,21 +2232,22 @@
     }
 
     async function toggleUser (username) {
-      const d = await api('/user/toggle', { username });
+      const d = await api('/user/toggle', { username }).catch(e => ({ success: false, error: e.message }));
       if (d.success) { toast(d.enabled ? '已开启' : '已关闭', 'success'); await loadAll(); renderUsers(); }
-      else toast('操作失败', 'error');
+      else toast('操作失败: ' + (d.error || ''), 'error');
     }
 
     async function deleteUser (username) {
       const ok = await customConfirm('确定删除用户监控 ' + username + ' ？');
       if (!ok) return;
-      const d = await api('/user/delete', { username });
+      const d = await api('/user/delete', { username }).catch(e => ({ success: false, error: e.message }));
       if (d.success) { toast('已删除', 'success'); await loadAll(); renderUsers(); }
-      else toast('删除失败', 'error');
+      else toast('删除失败: ' + (d.error || ''), 'error');
     }
 
     function editUser (username) {
-      const u = USUBS.find(s => s.username === username); if (!u) return;
+      // 与后端一致做大小写不敏感匹配：历史配置里可能存的是 Example-User
+      const u = USUBS.find(s => s.username.toLowerCase() === String(username).toLowerCase()); if (!u) return;
       $('edit-user-name').value = u.username;
       $('edit-user-display').textContent = u.username;
       editUserPicker = createGroupPicker('edit-user-grp-picker', u.groups || []);
@@ -2015,7 +2257,7 @@
     async function saveEditUser () {
       const username = $('edit-user-name').value;
       const groups = editUserPicker ? editUserPicker.getSelected() : [];
-      const d = await api('/user/update', { username, groups });
+      const d = await api('/user/update', { username, groups }).catch(e => ({ success: false, error: e.message }));
       if (d.success) { toast('用户监控已更新', 'success'); closeEditUser(); await loadAll(); renderUsers(); }
       else toast('更新失败: ' + (d.error || ''), 'error');
     }
